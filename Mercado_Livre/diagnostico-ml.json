@@ -1,0 +1,20 @@
+{
+  "node": "v24.12.0",
+  "http": 403,
+  "statusText": "Forbidden",
+  "tempoMs": 90,
+  "urlFinal": "https://produto.mercadolivre.com.br/MLB-5214725509-moltres-dia-_JM",
+  "houveRedirect": false,
+  "caracteres": 2584,
+  "htmlProduto": false,
+  "titulo": null,
+  "headers": {
+    "server": "CloudFront",
+    "content-type": "text/html",
+    "content-length": "2585",
+    "via": "1.1 07c2ce2f526880d2d9a49a68d8e11008.cloudfront.net (CloudFront)",
+    "x-cache": "Error from cloudfront",
+    "x-amz-cf-id": "i3DeEo8fTdvn47mU6C82MyWjWdT2D8FRU1QKgd0-ROHyPtYQVkRZoQ=="
+  },
+  "mensagem": "Mercado Libre - Donde comprar y vender de todo Hubo un error accediendo a esta pagina... Ir a la página principal"
+}

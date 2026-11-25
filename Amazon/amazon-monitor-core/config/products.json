@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "intervalSeconds": 10,
+  "maxConcurrency": 10,
+  "timeoutMs": 12000,
+  "maxConsecutiveFailures": 3,
+  "products": [
+    {
+      "asin": "B000GAYQJ0",
+      "name": "Casio A158WA",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0HC8JZC1D",
+      "name": "Pokemon Advanced Trainer Box",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0HCCTKPGN",
+      "name": "Pokemon Binder Collection",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0H7XF3LJL",
+      "name": "Pokemon Ilustracao Parceiro",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0HFNZP4JX",
+      "name": "Pokemon Celebracao 30 Anos",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0H3Q76WTZ",
+      "name": "Pokemon Colecao Greninja",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0HDZYGH9X",
+      "name": "Pokemon Mega Forcas Darkrai",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0HG7L4PWT",
+      "name": "Pokemon Forcas Dragonite",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0GLT3P8C1",
+      "name": "Pokemon Box Mega Charizard",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    },
+    {
+      "asin": "B0H3QKR97T",
+      "name": "Pokemon Evolucao Escuridao",
+      "enabled": true,
+      "categories": [
+        "AMAZON_DIRETA",
+        "TERCEIRO_ENVIO_AMAZON",
+        "TERCEIRO_ENVIO_PROPRIO"
+      ],
+      "target": {
+        "maxPriceCents": null,
+        "priceBasis": "NORMAL",
+        "includeShipping": false,
+        "minQuantity": 1
+      }
+    }
+  ],
+  "confirmationCycles": 2
+}

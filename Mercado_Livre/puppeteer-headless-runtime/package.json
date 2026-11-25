@@ -1,0 +1,28 @@
+{
+  "name": "puppeteer-headless-research",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/puppeteer-runtime.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node scripts/apply-puppeteer-runtime-patch.js",
+    "verify": "node scripts/verify-puppeteer-runtime-patch.js",
+    "botcheck:headful": "node scripts/run-botcheck.js headful",
+    "botcheck:headless": "node scripts/run-botcheck.js headless",
+    "experiment": "node scripts/run-botcheck.js",
+    "test:identity": "node --test scripts/native-metadata.test.js scripts/native-identity.test.js",
+    "probe:workers": "node scripts/probe-worker-capabilities.js",
+    "probe:startup": "node scripts/probe-worker-startup.js",
+    "test:integration": "node scripts/test-native-integration.js",
+    "test:stability": "node scripts/test-native-stability.js"
+  },
+  "dependencies": {
+    "research-puppeteer-runtime": "npm:puppeteer-core@24.8.1"
+  },
+  "devDependencies": {
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2"
+  }
+}

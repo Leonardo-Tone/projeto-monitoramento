@@ -1,0 +1,18 @@
+{
+  "name": "amazon-aod-monitor-core",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Nucleo experimental de monitoramento da primeira pagina de ofertas AOD; sem interface e sem compra.",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "scripts": {
+    "monitor": "node src/cli.mjs",
+    "replay": "node src/replay.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0"
+  }
+}

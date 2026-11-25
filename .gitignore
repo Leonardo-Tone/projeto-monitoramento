@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs & runtime outputs
+*.log
+*.jsonl
+npm-debug.log*
+
+# Heavy runtime data, Electron binaries & Chrome profiles (cookies/sessions)
+interface/.data/
+interface/.runtime/
+Mercado_Livre/perfis/
+Mercado_Livre/ml-persistente-*/
+Amazon/amazon-monitor-core/data/
+Amazon/aod-*.html
+Amazon/ofertas-*.json
+
+# Old backups & archives
+BACKUPS-CODIGO/
+interface/backup-*/
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db

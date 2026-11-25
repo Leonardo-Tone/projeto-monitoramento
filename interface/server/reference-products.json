@@ -1,0 +1,172 @@
+[
+  {
+    "store": "amazon",
+    "name": "Casio A158WA",
+    "url": "https://www.amazon.com.br/dp/B000GAYQJ0",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Advanced Trainer Box",
+    "url": "https://www.amazon.com.br/dp/B0HC8JZC1D",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Binder Collection",
+    "url": "https://www.amazon.com.br/dp/B0HCCTKPGN",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Ilustracao Parceiro",
+    "url": "https://www.amazon.com.br/dp/B0H7XF3LJL",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Celebracao 30 Anos",
+    "url": "https://www.amazon.com.br/dp/B0HFNZP4JX",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Colecao Greninja",
+    "url": "https://www.amazon.com.br/dp/B0H3Q76WTZ",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Mega Forcas Darkrai",
+    "url": "https://www.amazon.com.br/dp/B0HDZYGH9X",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Forcas Dragonite",
+    "url": "https://www.amazon.com.br/dp/B0HG7L4PWT",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Box Mega Charizard",
+    "url": "https://www.amazon.com.br/dp/B0GLT3P8C1",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "amazon",
+    "name": "Pokemon Evolucao Escuridao",
+    "url": "https://www.amazon.com.br/dp/B0H3QKR97T",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Moltres_Mini",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725509-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Night",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725529-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Nigh_Pika",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725539-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Mini_5541",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725541-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Mini_5543",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725543-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Lapras Day",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725553-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Espeon Day",
+    "url": "https://produto.mercadolivre.com.br/MLB-5214725555-_JM",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Greninja_Night",
+    "url": "https://www.mercadolivre.com.br/pokemon-tcg-30th-mini-tin-greninja-night-ingles/p/MLB2123122684?pdp_filters=item_id%3AMLB5214725545",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Pitch_Black",
+    "url": "https://www.mercadolivre.com.br/pokemontcg-megaevolution-pitch-black-booster-bundle-ingles/p/MLB76489730?pdp_filters=item_id%3AMLB5276063543",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  },
+  {
+    "store": "ml",
+    "name": "Toxel",
+    "url": "https://www.mercadolivre.com.br/pokemon-me04-caos-ascendente-blister-quadruplo-toxel-4-boosters-copag/p/MLB69735015?pdp_filters=item_id%3AMLB6823331442",
+    "expectedSellerId": "768826009",
+    "target": null,
+    "alert": false,
+    "auto": false
+  }
+]

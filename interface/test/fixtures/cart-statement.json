@@ -1,0 +1,269 @@
+{
+  "grouped_items": [
+    {
+      "polycards": [
+        {
+          "unique_id": "MLB5276063543",
+          "metadata": {
+            "id": "MLB5276063543",
+            "quantity": "2"
+          },
+          "checkbox": {
+            "checked": true,
+            "disabled": false,
+            "metadata": {
+              "items": [
+                {
+                  "item_id": "MLB5276063543"
+                }
+              ]
+            }
+          },
+          "add_to_cart_capability": {
+            "cart_status": {
+              "item_id": "MLB5276063543",
+              "quantity": 2,
+              "status": "enabled",
+              "display_quantity": 2
+            }
+          }
+        }
+      ]
+    },
+    {
+      "polycards": [
+        {
+          "unique_id": "MLB1300447614",
+          "metadata": {
+            "id": "MLB1300447614",
+            "quantity": "1"
+          },
+          "checkbox": {
+            "checked": false,
+            "disabled": false,
+            "metadata": {
+              "items": [
+                {
+                  "item_id": "MLB1300447614"
+                }
+              ]
+            }
+          },
+          "add_to_cart_capability": {
+            "cart_status": {
+              "item_id": "MLB1300447614",
+              "quantity": 1,
+              "status": "enabled",
+              "display_quantity": 1
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "cart_properties": {
+    "active_and_selected_items_size": 2
+  },
+  "summary": {
+    "ticket_rows": [
+      {
+        "id": "item",
+        "label": {
+          "text": "Produtos (2)"
+        },
+        "value": {
+          "text": "{price}",
+          "values": [
+            {
+              "key": "price",
+              "type": "price",
+              "price": {
+                "value": 399.9,
+                "currency": "BRL",
+                "size": 14,
+                "decimal_style": "superscript"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "shipping",
+        "label": {
+          "text": "Frete"
+        },
+        "value": {
+          "text": "{original} {price}",
+          "values": [
+            {
+              "key": "original",
+              "type": "price",
+              "price": {
+                "value": 18.3,
+                "currency": "BRL",
+                "size": 12,
+                "decimal_style": "superscript",
+                "previous": true
+              }
+            },
+            {
+              "key": "price",
+              "type": "label",
+              "label": {
+                "text": "Grátis"
+              },
+              "styles": {
+                "color_hex": "#00a650",
+                "font_weight": "regular"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "total_row": {
+      "id": "total",
+      "label": {
+        "text": "Total"
+      },
+      "value": {
+        "text": "{original} {price}",
+        "values": [
+          {
+            "key": "price",
+            "type": "price",
+            "price": {
+              "value": 399.9,
+              "currency": "BRL",
+              "size": 18,
+              "decimal_style": "superscript"
+            }
+          },
+          {
+            "key": "original",
+            "type": "price",
+            "price": {
+              "value": 418.2,
+              "currency": "BRL",
+              "size": 12,
+              "decimal_style": "superscript",
+              "previous": true
+            }
+          }
+        ]
+      }
+    },
+    "coupon_row": {
+      "id": "coupon",
+      "label": {
+        "text": "Inserir código do cupom"
+      }
+    }
+  },
+  "tracking": {
+    "summary": {
+      "total": {
+        "amount": 399.9,
+        "symbol": "R$"
+      },
+      "shipping_total": {
+        "amount": 0,
+        "symbol": "R$"
+      },
+      "shipping_promoted_amount": 0,
+      "coupons_link_wording": "Inserir código do cupom",
+      "coupons_type": {
+        "type": "NO_COUPON"
+      },
+      "discount_amount": 0,
+      "available_coupons": 0,
+      "used_coupons": 0
+    },
+    "items": [
+      {
+        "item": {
+          "id": "MLB5276063543",
+          "variation_id": "not_apply"
+        },
+        "quantity": 2,
+        "unit_price": 199.95,
+        "price_decrement_campaigns": [
+          {
+            "id": "not_apply",
+            "type": "not_apply",
+            "amount": 0
+          }
+        ]
+      },
+      {
+        "item": {
+          "id": "MLB1300447614",
+          "variation_id": "not_apply"
+        },
+        "quantity": 1,
+        "unit_price": 219.9,
+        "price_decrement_campaigns": [
+          {
+            "id": "not_apply",
+            "type": "not_apply",
+            "amount": 0
+          }
+        ]
+      }
+    ],
+    "grouping_items": [
+      {
+        "items_id": [
+          "MLB5276063543"
+        ],
+        "group_status": "selected",
+        "total_active_quantity_items": "2",
+        "coupons": [
+          {
+            "type": "no_coupon",
+            "reach_minimum": false,
+            "campaign_id": "no_information",
+            "given_discount": 0,
+            "scarcity_flag": false,
+            "scarcity_budget": false,
+            "scarcity_date": false,
+            "expiration_date": "no_information",
+            "min_purchase_amount": 0
+          }
+        ],
+        "action_coupon": {
+          "behave": "no_information",
+          "campaign_id": "no_information",
+          "campaign_ids": [],
+          "savings": 0
+        }
+      },
+      {
+        "items_id": [
+          "MLB1300447614"
+        ],
+        "group_status": "unselected",
+        "total_active_quantity_items": "0",
+        "coupons": [
+          {
+            "type": "no_coupon",
+            "reach_minimum": false,
+            "campaign_id": "no_information",
+            "given_discount": 0,
+            "scarcity_flag": false,
+            "scarcity_budget": false,
+            "scarcity_date": false,
+            "expiration_date": "no_information",
+            "min_purchase_amount": 0
+          }
+        ],
+        "action_coupon": {
+          "behave": "no_information",
+          "campaign_id": "no_information",
+          "campaign_ids": [],
+          "savings": 0
+        }
+      }
+    ]
+  }
+}

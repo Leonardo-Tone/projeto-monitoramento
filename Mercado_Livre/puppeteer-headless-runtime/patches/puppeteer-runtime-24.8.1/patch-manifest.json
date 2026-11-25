@@ -1,0 +1,21 @@
+{
+  "name": "research-puppeteer-runtime-patch",
+  "basePackage": "puppeteer-core",
+  "baseVersion": "24.8.1",
+  "runtimeFixMode": "addBinding",
+  "changedFiles": [
+    "lib/cjs/puppeteer/cdp/ExecutionContext.js",
+    "lib/cjs/puppeteer/cdp/FrameManager.js",
+    "lib/cjs/puppeteer/cdp/IsolatedWorld.js",
+    "lib/cjs/puppeteer/cdp/WebWorker.js",
+    "lib/cjs/puppeteer/cdp/TargetManager.js"
+  ],
+  "sourceHashes": {
+    "ExecutionContext.js": "b9b4cbcb1aefb11dfebf71a3525b9c393f60270bff8caa1652d9a32040c21314",
+    "FrameManager.js": "701d74803f3780e0e7f60faa3d70fedd71142eb0022bfd1129fc94476aa674a5",
+    "IsolatedWorld.js": "0978340f1e50fb5d3a4887e2d10ff8aa2ef9cef879d6452e55ff63dc3bcfa011",
+    "WebWorker.js": "58e597f24b1e16eea5a85ff4aa0bec43460ca3d7fdbc2ad633c6bd09b78859eb",
+    "TargetManager.js": "81ee87784f06fb3dc09f9ea2ecb5c07ed75d2e55f7b811870af1ffed8b118459"
+  },
+  "provenance": "Four original CommonJS addBinding runtime patches plus an opt-in TargetManager native identity initializer."
+}

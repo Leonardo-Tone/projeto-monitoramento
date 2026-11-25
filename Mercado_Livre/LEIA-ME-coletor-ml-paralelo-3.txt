@@ -1,0 +1,26 @@
+COLETOR MERCADO LIVRE - concorrencia maxima 3 por execucao (por origem)
+
+Uso:
+1. Abra qualquer pagina de produto em https://produto.mercadolivre.com.br, pressione F12,
+   entre no Console e cole TODO o codigo de coletor-ml-paralelo-3.js.
+   Baixara ml-lote-produto-paralelo3.zip com ate 7 HTMLs + relatorio-produto.json.
+2. Abra uma pagina em https://www.mercadolivre.com.br, abra o Console e cole
+   EXATAMENTE o mesmo codigo. Baixara ml-lote-catalogo-paralelo3.zip
+   com ate 3 HTMLs + relatorio-catalogo.json.
+3. Execute as duas passagens em momentos distintos se quiser garantir no maximo
+   3 consultas simultaneas no total. Rodar ambas juntas pode chegar a 6.
+4. O ZIP guarda o HTML bruto recebido, mesmo que o parser falhe; trate como privado.
+5. Em HTTP 401/403/429/503, novas consultas sao suspensas. As que ja estavam
+   em andamento podem concluir. Nunca repete automaticamente.
+6. Os dados de catalogo sao validados por ID da oferta E vendedor esperado.
+   Greninja e intencionalmente marcado identity_mismatch, sem alerta de estoque.
+7. Navegador pode bloquear redirecionamento entre dominios; o script nao tenta
+   forcar o acesso. Rodar na origem correta evita a maioria desses casos.
+
+Testado com 10 HTMLs fornecidos pelo usuario, em simulacao local:
+- 7 anuncios /produto classificados unavailable (todos corretamente).
+- 3 catalogos /www: 2 available, 1 identity_mismatch.
+- Concorrencia medida <=3 na simulacao.
+- Em cenario 429, fila suspende novas consultas; 3 restantes nao iniciaram.
+- Integridade ZIP verificada.
+Nao foi testado online com 3 requisicoes simultaneas reais.

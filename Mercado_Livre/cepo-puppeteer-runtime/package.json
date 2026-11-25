@@ -1,0 +1,16 @@
+{
+  "name": "cepo-puppeteer-runtime-kit",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/puppeteer-runtime.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node scripts/apply-puppeteer-runtime-patch.js",
+    "verify": "node scripts/verify-puppeteer-runtime-patch.js"
+  },
+  "dependencies": {
+    "cepo-puppeteer-runtime": "npm:puppeteer-core@24.8.1"
+  }
+}

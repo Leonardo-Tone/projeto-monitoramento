@@ -1,0 +1,50 @@
+COLETOR MERCADO LIVRE - PARALELO 3 - V3
+
+Correcao principal
+-----------------
+A V2 usava redirect:'manual'. Isso causava resposta opaqueredirect para os
+sete anuncios, inclusive quando a plataforma redirecionava para a URL
+canonica no MESMO subdominio. A V3 usa redirect:'follow' e verifica a origem
+final da resposta, preservando a separacao entre dominios e o tratamento
+normal do CORS do navegador.
+
+Foi corrigido tambem o cabecalho ZIP (campos de data/hora e CRC32).
+
+Execucao
+--------
+1) Abra um anuncio em https://produto.mercadolivre.com.br
+2) Abra o Console com F12 e cole todo o arquivo coletor-ml-paralelo-3-v3.js
+3) Aguarde o ZIP ml-lote-produto-paralelo3-v3.zip
+4) Em outra etapa (NAO simultaneamente), abra https://www.mercadolivre.com.br
+5) Cole o mesmo JavaScript e receba ml-lote-catalogo-paralelo3-v3.zip
+
+A concorrencia maxima e de 3 por execucao. Execute as duas etapas
+separadamente para nao ultrapassar 3 consultas simultaneas no total.
+
+Ajustes
+-------
+CONFIG.concorrencia: 3
+CONFIG.timeoutMs: 25000
+CONFIG.vendedorEsperado: '768826009'
+
+Protecoes
+---------
+* Preserva o HTML mesmo quando o parser nao consegue extrair os dados.
+* Identifica divergencia de ID de oferta/vendedor e nao considera reposicao.
+* Suspende novas consultas diante de 401/403/429/503 ou parser inesperado.
+* Requisicoes que ja foram iniciadas podem terminar.
+* Nao tenta contornar CORS nem bloqueios da plataforma.
+* URLs www e produto sao processadas em abas das respectivas origens.
+
+Verificacao realizada
+---------------------
+Node --check: aprovado.
+Simulacao offline com os 10 HTMLs existentes: 7/7 no lote produto,
+3/3 no lote catalogo, concorrencia maxima 3 em cada execucao.
+ZIPs simulados abertos e verificados com CRC correto em todos os arquivos.
+A nova versao ainda nao foi executada contra o Mercado Livre em tempo real.
+
+Privacidade
+-----------
+Os HTMLs baixados numa sessao autenticada podem conter tokens e outros
+dados privados. Evite publicar os ZIPs, e nao os salve em repositorios publicos.

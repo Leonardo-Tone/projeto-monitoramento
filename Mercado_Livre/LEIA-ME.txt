@@ -1,0 +1,31 @@
+COLETOR MERCADO LIVRE — V4 (concorrencia maxima: 10)
+
+Baseado no coletor V3, validado com 7/7 HTMLs no lote produto em 5.506 ms.
+
+USO (Chrome ou Edge, com login e anuncio aberto):
+1. Acesse qualquer anuncio em https://produto.mercadolivre.com.br
+2. Abra F12 > Console. Cole e execute o arquivo coletor-ml-paralelo-10-v4.js.
+3. Sera solicitado o ZIP ml-lote-produto-paralelo10-v4.zip com 7 HTMLs e relatorio-produto.json.
+4. Depois, acesse https://www.mercadolivre.com.br e execute o MESMO script.
+5. Sera solicitado ml-lote-catalogo-paralelo10-v4.zip com 3 HTMLs e relatorio-catalogo.json.
+
+ATENCAO
+- '10' e a capacidade maxima do pool de workers. Como as consultas estao
+  separadas por origem, o primeiro lote inicia ate 7 simultaneas e o segundo ate 3.
+- Nao execute os dois lotes ao mesmo tempo, se quiser limitar a concorrencia
+  global a 10 ou menos.
+- Mudancas de origem continuam sujeitas ao CORS; o script nao burla a politica.
+- HTML 200 e preservado mesmo se houver falha no parser.
+- HTTP 401, 403, 429 e 503 interrompem o agendamento de novas requisicoes,
+  mas as requisicoes ja em andamento concluem normalmente.
+- O ZIP contem HTML coletado no navegador autenticado, possivelmente com dados
+  sensiveis. Trate o ZIP como arquivo privado.
+- Nao foi feita coleta online desta V4; teste-a no seu navegador.
+
+RELATORIO
+- 'concorrencia': limite configurado (10).
+- 'picoSimultaneo': maximo observado naquele lote (7 ou 3, se tudo iniciar).
+- 'duracaoMs': tempo do lote.
+- 'consultas': HTTP, identificacao, extracao, duracao por produto e erros.
+
+Para mudar o limite manualmente, edite CONFIG.concorrencia (1 a 10).
