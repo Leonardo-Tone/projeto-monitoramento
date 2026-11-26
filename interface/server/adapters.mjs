@@ -42,7 +42,7 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
   const config=validarConfig({schemaVersion:1,intervalSeconds:15,maxConcurrency:3,timeoutMs:12000,maxConsecutiveFailures:3,confirmationCycles:2,
     products:products.map(p=>({asin:p.code,name:p.name||p.title||p.code,enabled:true,categories:settings?.amazon.onlyAmazon?['AMAZON_DIRETA']:['AMAZON_DIRETA','TERCEIRO_ENVIO_AMAZON','TERCEIRO_ENVIO_PROPRIO'],target:{maxPriceCents:p.target==null?null:Math.round(p.target*100),priceBasis:'NORMAL',includeShipping:false}}))});
   const store=new FileStore(join(dataDirectory,'amazon'));
-  let transport, fetchImpl;
+  let transport, amazonPage, fetchImpl;
   const metadataByAsin=new Map();
   // Fila de produtos Amazon que precisam de re-verificação instantânea.
   const recheckQueue=[];
@@ -53,25 +53,30 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
   if(!consultar){
     onStatus('starting','Preparando o perfil Chrome de monitoramento Amazon…');
     transport=monitoringRecovery({store:'amazon',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,
-      clearPages:()=>{fetchImpl=null;}});
+      clearPages:()=>{amazonPage=null;fetchImpl=null;}});
   }
   const parseMetadata=transport?createMetadataParser(projectRoot):null;
-  const collectAmazon=collect=>transport.run(async browser=>{
-    metadataByAsin.clear();
-    if(!fetchImpl){
+  const ensureAmazonPage=async browser=>{
+    if(!fetchImpl||!amazonPage||amazonPage.isClosed?.()){
       const page=await browser.newPage();
       const network=trackNetworkFailures(page);
       const response=await page.goto('https://www.amazon.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
-      if(response?.status()!==200)throw new Error('Amazon: HTTP '+response?.status());
+      if(!response)throw new Error('Falha de rede ao abrir a Amazon (net::ERR_FAILED).');
+      if(response.status()!==200)throw new Error('Amazon: HTTP '+response.status());
       const html=await page.content();
       if(/\/ap\/|captcha|challenge/i.test(new URL(page.url()).pathname)||/robot check|captchacharacters|\/errors\/validateCaptcha/i.test(html))throw new Error('Prepare o login ou a verificação no perfil de monitoramento Amazon antes de iniciar.');
       const fetch=profileFetch(page,{timeoutMs:config.timeoutMs,ErrorClass:AodError,onHtml:(html,url)=>metadataByAsin.set(url.searchParams.get('asin'),parseMetadata(html,'amazon'))});
+      amazonPage=page;
       fetchImpl=async url=>{
         network.clear(url);
         try{return await fetch(url);}
         catch(error){throw network.attach(error,url);}
       };
     }
+  };
+  const collectAmazon=collect=>transport.run(async browser=>{
+    metadataByAsin.clear();
+    await ensureAmazonPage(browser);
     return collect();
   });
   const baseConsultar=consultar??((asin,options)=>consultarAod(asin,{...options,fetchImpl}));
@@ -110,7 +115,18 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
         if(signal.aborted)break;
         try{
           const asin=product.code;
-          const dados=await withMonitoringRead(()=>transport?transport.run(async()=>consultarFn(asin,{timeoutMs:config.timeoutMs})):consultarFn(asin,{timeoutMs:config.timeoutMs}));
+          let dados;
+          if(transport){
+            const [entry]=await withMonitoringRead(()=>transport.run(async browser=>{
+              await ensureAmazonPage(browser);
+              try{return [{ok:true,value:await consultarFn(asin,{timeoutMs:config.timeoutMs})}];}
+              catch(erro){return [{ok:false,erro}];}
+            }));
+            if(!entry?.ok)throw entry?.erro??new Error('Falha na re-verificação Amazon.');
+            dados=entry.value;
+          }else{
+            dados=await withMonitoringRead(()=>consultarFn(asin,{timeoutMs:config.timeoutMs}));
+          }
           const configProduct=config.products.find(p=>p.asin===asin);
           if(!configProduct)continue;
           const {construirSnapshot:buildSnap}=await moduleAt(core,'domain.mjs');
@@ -192,21 +208,25 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
   // Fila de produtos que precisam de re-verificação instantânea.
   const recheckQueue=[];
   registerRecheck(product=>{recheckQueue.push(structuredClone(product));});
-  async function collect(browser){
+  async function ensureMLPages(browser){
     const traditional=products.filter(p=>p.type==='produto');
     const catalogs=products.filter(p=>p.type==='catalogo');
-    if(traditional.length&&!productPage){
+    if(traditional.length&&(!productPage||productPage.isClosed?.())){
       const bootstrap=await prepararAba(browser,'produto',traditional[0].url,'https://produto.mercadolivre.com.br',true,signal);
       if(!bootstrap.pronto)throw new Error(bootstrap.erro??'ML não pôde preparar a aba: '+bootstrap.motivo+'. Faça login manual nas configurações.');
       productPage=bootstrap.page;
       networkByPage.set(productPage,trackNetworkFailures(productPage));
     }
-    if(catalogs.length&&!catalogPage){
+    if(catalogs.length&&(!catalogPage||catalogPage.isClosed?.())){
       const bootstrap=await prepararAba(browser,'catalogo','https://www.mercadolivre.com.br/','https://www.mercadolivre.com.br',false,signal);
       if(!bootstrap.pronto)throw new Error(bootstrap.erro??'ML não pôde preparar o catálogo: '+bootstrap.motivo+'.');
       catalogPage=bootstrap.page;
       networkByPage.set(catalogPage,trackNetworkFailures(catalogPage));
     }
+    return {traditional,catalogs};
+  }
+  async function collect(browser){
+    const {traditional,catalogs}=await ensureMLPages(browser);
     const consult=async(product,page,fn)=>{
       const network=networkByPage.get(page);
       network.clear(product.url);
@@ -228,6 +248,7 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
       consult(product,page,kind==='produto'?consultarProduto:consultarCatalogo)});
   }
   async function recheckProduct(browser,product){
+    await ensureMLPages(browser);
     const page=product.type==='produto'?productPage:catalogPage;
     const fn=product.type==='produto'?consultarProduto:consultarCatalogo;
     if(!page)return null;
@@ -268,7 +289,7 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
           for(const product of toRecheck){
             if(signal.aborted)break;
             const result=await recheckProduct(browser,product);
-            if(result)out.push({product,result});
+            if(result)out.push({ok:!result.error,product,result,erro:result.error?new Error(result.error):null});
           }
           return out;
         }));

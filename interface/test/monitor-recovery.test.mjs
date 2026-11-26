@@ -98,3 +98,98 @@ test('repeated Chrome timeouts exhaust recovery after one tab reset and one brow
   assert.equal((await recovery.run(collect))[0].ok, false);
   assert.deepEqual({ tabs, restarts, attempts }, { tabs: 1, restarts: 1, attempts: 4 });
 });
+
+test('product-level 404 and divergent origin do not trigger recovery or mask transport timeouts', async () => {
+  const events = [];
+  let resets = 0, attempts = 0;
+  const browser = {
+    isCurrent: () => true, reportFailure: () => false, clearFailure() {},
+    async resetPages() { resets++; },
+  };
+  const recovery = createMonitorRecovery({
+    store: 'amazon', signal: new AbortController().signal, open: async () => browser,
+    clearPages() {}, onStatus() {}, onDiagnostic: event => events.push(event.action),
+    retryDelayMs: 0, restartDelayMs: 0,
+  });
+  await recovery.start();
+  // Isolated 404 or divergent origin should pass cleanly without READ_FAILED/REOPEN_TABS.
+  const onlyProductErrors = await recovery.run(async () => [
+    { ok: true, value: 'ok' },
+    { ok: false, erro: new Error('HTTP 404 no ASIN B0HGNQ3HJJ') },
+    { ok: false, erro: new Error('Origem da resposta ML divergente. Use o link final do anúncio ou catálogo.') },
+  ]);
+  assert.equal(onlyProductErrors.length, 3);
+  assert.equal(resets, 0);
+  assert.deepEqual(events, []);
+
+  // Combined with a CHROME_TIMEOUT, the transport error is still recovered.
+  const mixed = await recovery.run(async () => ++attempts === 1
+    ? [{ ok: false, erro: new Error('HTTP 404 no ASIN B0HGNQ3HJJ') }, ...failed(timeout())]
+    : [{ ok: false, erro: new Error('HTTP 404 no ASIN B0HGNQ3HJJ') }, { ok: true, value: 'recovered' }]);
+  assert.equal(mixed[1].ok, true);
+  assert.equal(resets, 1);
+  assert.deepEqual(events, ['READ_FAILED', 'REOPEN_TABS', 'RECOVERED']);
+});
+
+test('replaceBrowser retries transient session verification failures before giving up', async () => {
+  const events = [];
+  let opens = 0;
+  let current = true;
+  const makeBrowser = () => ({
+    isCurrent: () => current,
+    reportFailure: () => true,
+    clearFailure() {},
+    async resetPages() {},
+    async restart() {},
+    async close() {},
+  });
+  const recovery = createMonitorRecovery({
+    store: 'ml', signal: new AbortController().signal,
+    async open(reconnecting) {
+      opens++;
+      if (reconnecting && opens < 3) throw new Error('Mercado Livre: não foi possível confirmar a sessão do perfil Monitoramento.');
+      current = true;
+      return makeBrowser();
+    },
+    clearPages() {}, onStatus() {}, onDiagnostic: event => events.push(event.action),
+    retryDelayMs: 0, restartDelayMs: 0, maxRecoveryAttempts: 3,
+  });
+  await recovery.start();
+  current = false;
+  const res = await recovery.run(async () => [{ ok: true, value: 'back' }]);
+  assert.deepEqual(res, [{ ok: true, value: 'back' }]);
+  assert.equal(opens, 3);
+  assert.deepEqual(events, ['READ_FAILED', 'RESTART_BROWSER', 'RECOVERY_RETRY', 'RECOVERED']);
+});
+
+test('restart cooldown allows a new browser restart after cooldown expires and watchdog catches hung cycles', async () => {
+  let restarts = 0, attempts = 0;
+  const browser = {
+    isCurrent: () => true, reportFailure: () => true, clearFailure() {},
+    async resetPages() {},
+    async restart() { restarts++; },
+    async close() {},
+  };
+  const recovery = createMonitorRecovery({
+    store: 'amazon', signal: new AbortController().signal, open: async () => browser,
+    clearPages() {}, onStatus() {}, onDiagnostic() {},
+    retryDelayMs: 0, restartDelayMs: 0, restartCooldownMs: 25, cycleTimeoutMs: 30,
+  });
+  await recovery.start();
+  // First run hangs -> watchdog triggers CHROME_TIMEOUT -> restarts browser -> second attempt succeeds.
+  const first = await recovery.run(async () => {
+    attempts++;
+    if (attempts === 1) return new Promise(() => {});
+    return [{ ok: true, value: 'after-watchdog' }];
+  });
+  assert.deepEqual(first, [{ ok: true, value: 'after-watchdog' }]);
+  assert.equal(restarts, 1);
+
+  // Wait past cooldown and verify a subsequent failure can restart again.
+  await new Promise(resolve => setTimeout(resolve, 35));
+  let secondAttempts = 0;
+  const second = await recovery.run(async () => ++secondAttempts === 1 ? failed(timeout()) : [{ ok: true }]);
+  assert.deepEqual(second, [{ ok: true }]);
+  assert.equal(restarts, 2);
+});
+

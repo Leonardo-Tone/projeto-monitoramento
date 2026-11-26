@@ -64,7 +64,10 @@ export function createProfilePool(launcher=launchDedicatedProfile) {
         return [...entry.failures].some(([other,at])=>other!==store&&Date.now()-at<=60000);
       };
       lease.clearFailure=store=>entry.failures?.delete(store);
-      lease.resetPages=()=>Promise.allSettled([...pages].map(page=>page.close()));
+      lease.resetPages=()=>Promise.allSettled([...pages].map(page=>Promise.race([
+        page.close(),
+        new Promise(resolve=>setTimeout(resolve,3000)),
+      ])));
       lease.restart=async()=>{
         if(entries.get(key)===entry)await retire(entry,key);
         else if(entry.closing)await entry.closing;
@@ -77,7 +80,10 @@ export function createProfilePool(launcher=launchDedicatedProfile) {
         if(entry.closing)await entry.closing;
         else if(entry.users===0){
           if(entries.get(key)===entry)await retire(entry,key);
-        }else await Promise.allSettled([...pages].map(page=>page.close()));
+        }else await Promise.allSettled([...pages].map(page=>Promise.race([
+          page.close(),
+          new Promise(resolve=>setTimeout(resolve,3000)),
+        ])));
       }finally{lease.emit('disconnected');}
     })();
     return {browser:lease,profile};
@@ -110,13 +116,18 @@ export function profileFetch(page,{timeoutMs=12000,ErrorClass=Error,onHtml=null}
   return async(url)=>{
     const target=new URL(url);
     if(target.origin!=='https://www.amazon.com.br')fail('Origem Amazon inválida.');
-    const result=await page.evaluate(async({url,timeoutMs})=>{
-      const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);
-      try {
-        const response=await fetch(url,{credentials:'same-origin',redirect:'follow',signal:controller.signal,headers:{Accept:'text/html, */*','Accept-Language':'pt-BR,pt;q=0.9'}});
-        return {status:response.status,url:response.url,html:response.status===200?await response.text():''};
-      } finally {clearTimeout(timer);}
-    },{url:target.href,timeoutMs});
+    if(page.isClosed?.())throw Object.assign(new Error('Target closed: aba de monitoramento Amazon encerrada.'),{code:'BROWSER_DISCONNECTED'});
+    let timer;
+    const result=await Promise.race([
+      page.evaluate(async({url,timeoutMs})=>{
+        const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);
+        try {
+          const response=await fetch(url,{credentials:'same-origin',redirect:'follow',signal:controller.signal,headers:{Accept:'text/html, */*','Accept-Language':'pt-BR,pt;q=0.9'}});
+          return {status:response.status,url:response.url,html:response.status===200?await response.text():''};
+        } finally {clearTimeout(timer);}
+      },{url:target.href,timeoutMs}),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Runtime.callFunctionOn timed out (profileFetch).'),{code:'CHROME_TIMEOUT'})),timeoutMs+5000);}),
+    ]).finally(()=>clearTimeout(timer));
     const final=new URL(result.url);
     if(final.origin!==target.origin||/\/ap\/|captcha|challenge|account-verification/i.test(final.pathname))fail('A Amazon exige login ou verificação manual no perfil de monitoramento.','SESSION_REQUIRED');
     if(result.status===200&&onHtml)onHtml(result.html,target);

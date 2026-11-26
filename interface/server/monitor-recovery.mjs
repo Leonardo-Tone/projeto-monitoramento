@@ -36,28 +36,98 @@ export function trackNetworkFailures(page) {
   };
 }
 
+function isProductLevelFailure(failure) {
+  if (!failure) return false;
+  if (failure.kind === 'HTTP' && failure.status === 404) return true;
+  if (/origem .*divergente/i.test(failure.message)) return true;
+  return false;
+}
+
+function waitAbortable(ms, signal) {
+  if (!ms || ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error('Operação cancelada.'));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error('Operação cancelada.'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function withCycleWatchdog(task, timeoutMs, signal) {
+  if (!timeoutMs || timeoutMs <= 0) return task();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      fn(value);
+    };
+    const onAbort = () => done(reject, signal.reason ?? new Error('Operação cancelada.'));
+    const timer = setTimeout(() => {
+      done(reject, Object.assign(new Error(`Protocol error: ciclo excedeu ${timeoutMs} ms (protocolTimeout).`), { code: 'CHROME_TIMEOUT' }));
+    }, timeoutMs);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve().then(task).then(val => done(resolve, val), err => done(reject, err));
+  });
+}
+
 // A collector returns one outcome per product. Only the final attempt leaves
 // this function, so observations and purchase eligibility use a single batch.
-export function createMonitorRecovery({ store, signal, open, clearPages, onStatus, onDiagnostic, runningMessage }) {
+export function createMonitorRecovery({
+  store,
+  signal,
+  open,
+  clearPages,
+  onStatus,
+  onDiagnostic,
+  runningMessage,
+  retryDelayMs = 1500,
+  restartDelayMs = 3000,
+  restartCooldownMs = 60_000,
+  cycleTimeoutMs = 90_000,
+  maxRecoveryAttempts = 3,
+}) {
   let browser;
-  let restarted = false;
+  let lastRestartAt = null;
+  let consecutiveFailures = 0;
+  let reconnections = 0;
   const disconnected = () => Object.assign(new Error('Chrome de monitoramento desconectado.'), { code: 'BROWSER_DISCONNECTED' });
-  const report = (action, failure) => onDiagnostic({ action, ...failure });
+  const inRestartCooldown = () => lastRestartAt !== null && Date.now() - lastRestartAt < restartCooldownMs;
+  const report = (action, failure) => onDiagnostic({ action, consecutiveFailures, reconnections, ...failure });
 
   async function replaceBrowser() {
     const previous = browser;
     if (previous) {
-      await previous.restart();
-      await previous.close();
+      await previous.restart?.();
+      await previous.close?.();
+      browser = null;
     }
     clearPages();
-    signal.throwIfAborted();
-    browser = await open(true);
+    for (let attempt = 1; attempt <= maxRecoveryAttempts; attempt++) {
+      signal.throwIfAborted();
+      try {
+        browser = await open(true);
+        return;
+      } catch (caught) {
+        signal.throwIfAborted();
+        if (attempt >= maxRecoveryAttempts) throw caught;
+        report('RECOVERY_RETRY', monitorFailure(caught));
+        await waitAbortable(restartDelayMs * attempt, signal);
+      }
+    }
   }
 
   return {
     async start() { browser = await open(false); },
-    async close() { await browser?.close(); },
+    async close() { await browser?.close?.(); },
     async run(collect) {
       let retriedTab = false;
       let reconnecting = false;
@@ -65,10 +135,14 @@ export function createMonitorRecovery({ store, signal, open, clearPages, onStatu
         signal.throwIfAborted();
         let results, failure, error;
         try {
-          if (!browser.isCurrent()) throw disconnected();
-          results = await collect(browser);
-          if (!browser.isCurrent()) throw disconnected();
-          const failures = results.filter(result => !result.ok).map(result => monitorFailure(result.erro));
+          if (!browser || !browser.isCurrent()) throw disconnected();
+          results = await withCycleWatchdog(() => collect(browser), cycleTimeoutMs, signal);
+          if (!browser || !browser.isCurrent()) throw disconnected();
+          const list = Array.isArray(results) ? results : [];
+          const failures = list
+            .filter(result => result && !result.ok)
+            .map(result => monitorFailure(result.erro))
+            .filter(item => !isProductLevelFailure(item));
           failure = failures.find(item => !item.retryable) ?? failures[0];
         } catch (caught) {
           error = caught;
@@ -76,39 +150,43 @@ export function createMonitorRecovery({ store, signal, open, clearPages, onStatu
         }
         signal.throwIfAborted();
         if (!failure) {
-          browser.clearFailure(store);
-          restarted = false;
+          browser.clearFailure?.(store);
+          lastRestartAt = null;
+          consecutiveFailures = 0;
           if (reconnecting) {
+            reconnections++;
             report('RECOVERED');
             onStatus('running', runningMessage);
           }
           return results;
         }
+        consecutiveFailures++;
         report('READ_FAILED', failure);
-        if (!failure.retryable) browser.clearFailure(store);
-        const bothFailed = failure.retryable && browser.reportFailure(store);
-        const replace = !browser.isCurrent() || bothFailed || failure.kind === 'BROWSER_DISCONNECTED' ||
+        if (!failure.retryable) browser?.clearFailure?.(store);
+        const bothFailed = failure.retryable && browser?.reportFailure?.(store);
+        const replace = !browser || !browser.isCurrent() || bothFailed || failure.kind === 'BROWSER_DISCONNECTED' ||
           retriedTab && failure.kind === 'CHROME_TIMEOUT';
-        if (failure.retryable && replace && !restarted) {
-          restarted = true;
+        if (failure.retryable && replace && !inRestartCooldown()) {
+          lastRestartAt = Date.now();
           reconnecting = true;
           onStatus('reconnecting', 'Reconectando: reiniciando o Chrome compartilhado.');
           report('RESTART_BROWSER', failure);
-          try { await replaceBrowser(); }
-          catch (caught) {
+          try {
+            await replaceBrowser();
+          } catch (caught) {
             signal.throwIfAborted();
             report('RECOVERY_FAILED', monitorFailure(caught));
             throw caught;
           }
           continue;
         }
-        if (failure.retryable && !retriedTab && !restarted) {
+        if (failure.retryable && !retriedTab && !inRestartCooldown()) {
           retriedTab = true;
           reconnecting = true;
           onStatus('reconnecting', 'Reconectando: reabrindo as abas de monitoramento.');
           report('REOPEN_TABS', failure);
           clearPages();
-          await browser.resetPages();
+          await browser.resetPages?.();
           continue;
         }
         if (reconnecting) {

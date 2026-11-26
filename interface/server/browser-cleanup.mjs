@@ -13,6 +13,11 @@ export async function closeOwnedBrowser(browser,{timeoutMs=5000}={}) {
   }
   if(child&&child.exitCode==null&&child.signalCode==null){
     try{await deadline(()=>new Promise(resolve=>{if(child.exitCode!=null||child.signalCode!=null)return resolve();child.once('exit',resolve);}),1000);}
-    catch{if(child.exitCode==null&&child.signalCode==null&&child.kill()===false)throw new Error('Não foi possível encerrar o Chrome da compra.');}
+    catch{
+      if(child.exitCode==null&&child.signalCode==null){
+        try{child.kill('SIGKILL');}catch{}
+        if(child.exitCode==null&&child.signalCode==null&&child.kill()===false)throw new Error('Não foi possível encerrar o Chrome da compra.');
+      }
+    }
   }
 }

@@ -301,10 +301,15 @@ export class MonitoringService {
 
         onCycle:cycle=>{if(store==='ml')void this.log.event('CYCLE_END',{runId:this.runId,cycle:this.cycleSequence.ml,ok:cycle.ok}).catch(e=>{this.storageError=e.message;});if(!controller.signal.aborted)void this.purchases.cycle(store,{...cycle,products:structuredClone(this.cycleProducts.get(store)??this.registry.products.filter(p=>p.store===store))}).catch(e=>{this.storageError=e.message;void this.stop();});},
 
-        onDiagnostic:details=>{void this.recoveryLog.event('MONITOR_RECOVERY',{store,runId:this.runId,cycle:this.cycleSequence[store],...details}).catch(e=>{this.storageError=e.message;});},
+        onDiagnostic:details=>{
+          if(details?.action==='RECOVERED'){
+            this.shops[store]={...this.shops[store],reconnections:details.reconnections??((this.shops[store].reconnections??0)+1),lastRecoveredAt:new Date().toISOString()};
+          }
+          void this.recoveryLog.event('MONITOR_RECOVERY',{store,runId:this.runId,cycle:this.cycleSequence[store],...details}).catch(e=>{this.storageError=e.message;});
+        },
         onStatus:(status,message)=>{if(!controller.signal.aborted){
           if(status==='reconnecting')this.purchases.invalidateCycle(store);
-          this.shops[store]={status,message};
+          this.shops[store]={...this.shops[store],status,message};
         }}
 
       })).catch(e=>{
