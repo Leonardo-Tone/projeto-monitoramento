@@ -562,6 +562,7 @@ function renderAdminAllowlist(entries) {
 }
 
 $('auth-logout')?.addEventListener('click', async () => {
+  if (!window.confirm('Deseja sair da sua conta Google no Vigia?')) return;
   try {
     await action('auth/logout', 'POST', {});
     toast('Sessão encerrada.');

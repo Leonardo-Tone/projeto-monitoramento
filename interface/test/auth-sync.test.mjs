@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { request as httpRequest } from 'node:http';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -279,3 +280,47 @@ test('automatically downloads, verifies SHA-256, and installs published VPS upda
     await rm(targetDir, { recursive: true, force: true });
   }
 });
+
+test('allows GET / top-level navigation with Sec-Fetch-Site: cross-site after OAuth redirect while blocking /api/*', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-nav-'));
+  let app;
+  const rawGet = (port, path, headers) => new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: '127.0.0.1', port, path, method: 'GET', headers }, res => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+  try {
+    app = await createApplication({ dataDirectory: dataDir });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const port = app.server.address().port;
+
+    // Navegação GET / redirecionada após OAuth (Sec-Fetch-Site: cross-site + Sec-Fetch-Mode: navigate) deve funcionar
+    const rootRes = await rawGet(port, '/', {
+      'Sec-Fetch-Site': 'cross-site',
+      'Sec-Fetch-Mode': 'navigate',
+    });
+    assert.equal(rootRes.status, 200);
+    assert.match(rootRes.headers['content-type'] ?? '', /text\/html/);
+
+    // Requisição cross-site para / sem sec-fetch-mode: navigate continua bloqueada
+    const rootNonNav = await rawGet(port, '/', {
+      'Sec-Fetch-Site': 'cross-site',
+      'Sec-Fetch-Mode': 'cors',
+    });
+    assert.equal(rootNonNav.status, 403);
+
+    // Rotas /api/* continuam bloqueadas para cross-site mesmo com sec-fetch-mode: navigate
+    const apiRes = await rawGet(port, '/api/state', {
+      'Sec-Fetch-Site': 'cross-site',
+      'Sec-Fetch-Mode': 'navigate',
+    });
+    assert.equal(apiRes.status, 403);
+  } finally {
+    if (app) await app.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+

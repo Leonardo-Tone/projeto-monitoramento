@@ -85,7 +85,8 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
         const origin=`http://${expectedHost}`;
         const url=new URL(req.url,origin);
         const isOAuthCallback=req.method==='GET'&&url.pathname==='/api/auth/callback';
-        if(!isOAuthCallback&&((req.headers.origin&&req.headers.origin!==origin)||req.headers['sec-fetch-site']==='cross-site'))return json(403,{error:'Origem não permitida.'});
+        const isRootNavigation=req.method==='GET'&&url.pathname==='/'&&req.headers['sec-fetch-mode']==='navigate';
+        if(!isOAuthCallback&&!isRootNavigation&&((req.headers.origin&&req.headers.origin!==origin)||req.headers['sec-fetch-site']==='cross-site'))return json(403,{error:'Origem não permitida.'});
         res.setHeader('X-Content-Type-Options','nosniff');
         res.setHeader('Referrer-Policy','no-referrer');
         res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://http2.mlstatic.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
