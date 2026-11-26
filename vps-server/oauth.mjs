@@ -63,10 +63,21 @@ export async function exchangeGoogleCode({ code, codeVerifier, clientId, clientS
     throw new Error('O e-mail da conta Google não está verificado.');
   }
 
+  const rawPicture = String(profile.picture ?? '').trim();
+  let picture = '';
+  if (rawPicture.startsWith('https://lh3.googleusercontent.com/')) {
+    try {
+      const parsed = new URL(rawPicture);
+      if (parsed.origin === 'https://lh3.googleusercontent.com' && !parsed.username && !parsed.password) {
+        picture = parsed.href;
+      }
+    } catch {}
+  }
+
   return {
     googleSub: String(profile.sub),
     email: String(profile.email).trim().toLowerCase(),
     name: String(profile.name ?? ''),
-    picture: String(profile.picture ?? ''),
+    picture,
   };
 }

@@ -357,6 +357,8 @@ export class MonitoringService {
 
     await Promise.allSettled([...jobs.map(([,job])=>job.promise),this.purchases.stop()]);await Promise.all([this.log.flush(),this.recoveryLog.flush()]);
 
+    await this.save(this.registry);
+
   }
 
   async updateSettings(input) {

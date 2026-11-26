@@ -65,6 +65,7 @@ try {
     const archivePath = arg2;
     const notes = rest.join(' ');
     if (!version || !archivePath) throw new Error('Uso: node cli.mjs publish <versao> <caminho.tar.gz> [notas]');
+    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Versão inválida. Use o formato X.Y.Z (ex.: 0.12.0).');
     mkdirSync(releasesDir, { recursive: true });
     const filename = `vigia-${version}.tar.gz`;
     const dest = join(releasesDir, filename);
@@ -77,6 +78,7 @@ try {
     const version = arg1;
     const notes = [arg2, ...rest].filter(Boolean).join(' ');
     if (!version) throw new Error('Uso: node cli.mjs pack <versao> [notas]');
+    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Versão inválida. Use o formato X.Y.Z (ex.: 0.12.0).');
     const interfaceDir = resolve(__dirname, '..', 'interface');
     mkdirSync(releasesDir, { recursive: true });
     const filename = `vigia-${version}.tar.gz`;

@@ -20,6 +20,26 @@ export function compareSemver(a, b) {
   return 0;
 }
 
+export function validateTarListing(stdout) {
+  const lines = String(stdout ?? '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (line.startsWith('l') || line.startsWith('h')) {
+      throw new Error('Atualização bloqueada por segurança: o pacote contém links simbólicos ou hardlinks.');
+    }
+    const gnuMatch = line.match(/^[a-zA-Z-]{10}\s+\S+\s+\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(.+)$/);
+    const bsdMatch = !gnuMatch ? line.match(/^[a-zA-Z-]{10}\s+\d+\s+\S+\s+\S+\s+\d+\s+\S+\s+\d+\s+\S+\s+(.+)$/) : null;
+    const entryPath = (gnuMatch?.[1] ?? bsdMatch?.[1] ?? line.split(/\s+/).slice(5).join(' ')).trim();
+    if (!entryPath) continue;
+    if (entryPath.startsWith('/') || entryPath.startsWith('\\') || /^[a-zA-Z]:[\\/]/.test(entryPath)) {
+      throw new Error('Atualização bloqueada por segurança: caminho absoluto detectado no pacote.');
+    }
+    const segments = entryPath.split(/[\\/]+/);
+    if (segments.some(seg => seg === '..')) {
+      throw new Error('Atualização bloqueada por segurança: caminho fora do diretório de destino (Tar Slip).');
+    }
+  }
+}
+
 export class AutoUpdater {
   constructor({ authClient, targetDirectory, currentVersion, onRestart = null } = {}) {
     this.authClient = authClient;
@@ -92,13 +112,16 @@ export class AutoUpdater {
         await writeFile(archivePath, buffer);
 
         this.status = 'installing';
+        const { stdout: listing } = await execFileAsync('tar', ['-tvzf', archivePath], { timeout: 30000 });
+        validateTarListing(listing);
+
         await execFileAsync('tar', [
           '-xzf', archivePath,
           '--exclude=.data',
           '--exclude=.runtime',
           '--exclude=.env',
           '-C', this.targetDirectory,
-        ]);
+        ], { timeout: 60000 });
 
         this.currentVersion = manifest.version;
         this.status = 'restarting';

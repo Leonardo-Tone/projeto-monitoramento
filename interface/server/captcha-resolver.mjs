@@ -36,6 +36,22 @@ export async function revealCaptchaPage(page) {
   return { restored, focused };
 }
 
+export function isValidStoreResolvedUrl(rawUrl, store) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+    const host = parsed.hostname.toLowerCase();
+    const domainOk = store === 'amazon'
+      ? host === 'amazon.com.br' || host.endsWith('.amazon.com.br')
+      : host === 'mercadolivre.com.br' || host.endsWith('.mercadolivre.com.br');
+    if (!domainOk) return false;
+    if (/\/(?:ap|auth|login|identification)(?:\/|$)/i.test(parsed.pathname)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function openProductCaptcha({
   projectRoot,
   dataDirectory,
@@ -47,6 +63,7 @@ export async function openProductCaptcha({
   inspect = isCaptchaPage,
   bringToFront = revealCaptchaPage,
   pollIntervalMs = 1000,
+  maxWaitMs = 10 * 60 * 1000,
 }) {
   if (signal?.aborted) return;
   // 1. Libera qualquer instância headless do perfil compartilhado de monitoramento
@@ -79,19 +96,20 @@ export async function openProductCaptcha({
       message: `Resolva o CAPTCHA de ${product.name || product.code} na janela aberta para continuar o monitoramento.`
     }).catch(() => {});
 
-    // 6. Aguarda o usuário resolver o captcha ou fechar o navegador
+    // 6. Aguarda o usuário resolver o captcha ou fechar o navegador (com timeout máximo)
     let cleanStreak = 0;
-    while (!signal?.aborted) {
+    const deadline = Date.now() + maxWaitMs;
+    while (!signal?.aborted && Date.now() < deadline) {
       if (page.isClosed()) break;
       await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
-      if (page.isClosed() || signal?.aborted) break;
+      if (page.isClosed() || signal?.aborted || Date.now() >= deadline) break;
 
       try {
         const url = page.url();
         const html = await page.content().catch(() => '');
         const challenge = inspect(url, html);
 
-        if (!challenge && /^(https?:\/\/)/i.test(url)) {
+        if (!challenge && isValidStoreResolvedUrl(url, product.store)) {
           cleanStreak++;
           if (cleanStreak >= 2) {
             // Captcha resolvido com sucesso!

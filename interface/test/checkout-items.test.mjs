@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile}from'node:fs/promises';
+import {dirname,resolve}from'node:path';
+import {fileURLToPath}from'node:url';
 import {parseNordicRendering,checkoutItemsFromFlox}from'../server/checkout-items.mjs';
 import {createCheckoutParser}from'../server/purchase-html.mjs';
 import {reviewLines}from'../server/purchase-rules.mjs';
+const projectRoot = process.env.MONITOR_PROJECT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const fixture=await readFile(new URL('./fixtures/checkout-flox.html',import.meta.url),'utf8');
 const state=()=>parseNordicRendering(fixture);
 const data=json=>json.appProps.pageProps.flox.floxPreloadedState['@meli/web/flox/FLOX_STATE'].pendingTracks[0].tracking.tracks[0].data.event_data;
@@ -21,7 +24,7 @@ test('unknown currency, duplicate products and conflicting variants invalidate c
 });
 test('parser uses the observed checkout state and never executes scripts following JSON',()=>{
   assert.deepEqual(parseNordicRendering('_n.ctx.r={"safe":"brace } in string"}; throw Error("must not execute");'),{safe:'brace } in string'});
-  const parser=createCheckoutParser(process.env.MONITOR_PROJECT_ROOT),review=parser.review(fixture);
+  const parser=createCheckoutParser(projectRoot),review=parser.review(fixture);
   const expected=[{itemId:'MLB5276063543',quantity:2,sellerId:'768826009',limitCents:20000}];
   assert.equal(reviewLines(review,expected,new Map(),String)[0].unitCents,19995);
   assert.equal(parseNordicRendering('_n.ctx.r={notJSON:true}'),null);

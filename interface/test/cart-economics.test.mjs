@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { projectCart } from '../server/purchase-cart.mjs';
 import { validateCartStatement, purchaseDefaults } from '../server/purchase-rules.mjs';
 import { createCheckoutParser, chooseShipping } from '../server/purchase-html.mjs';
+const projectRoot = process.env.MONITOR_PROJECT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const fixture=JSON.parse(await readFile(new URL('./fixtures/cart-statement.json',import.meta.url),'utf8'));
 const expected=[{itemId:'MLB5276063543',quantity:2,limitCents:20000,name:'Produto'}];
@@ -47,7 +50,7 @@ test('cart counts total units consistently for a product quantity greater than o
   const cart=structuredClone(fixture);cart.cart_properties.active_and_selected_items_size=1;assert.equal(projectCart(cart).complete,false);
 });
 test('captured checkout shipping chooses tomorrow over the weekend when both are free',async()=>{
-  const parser=createCheckoutParser(process.env.MONITOR_PROJECT_ROOT);
+  const parser=createCheckoutParser(projectRoot);
   const html=await readFile(new URL('./fixtures/shipping-live.html',import.meta.url),'utf8');
   const groups=parser.shipping(html,new Date('2026-11-05T17:00:33Z'));assert.equal(groups.length,1);
   const best=chooseShipping(groups[0].options);assert.equal(best.cents,0);assert.match(best.label,/amanhã/);assert.equal(best.value,'2167789377');

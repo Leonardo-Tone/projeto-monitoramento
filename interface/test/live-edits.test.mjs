@@ -1,7 +1,8 @@
 import test from 'node:test';import assert from'node:assert/strict';
-import{mkdtemp,rm,readFile}from'node:fs/promises';import{join}from'node:path';import{tmpdir}from'node:os';
+import{mkdtemp,rm,readFile}from'node:fs/promises';import{dirname,join,resolve}from'node:path';import{tmpdir}from'node:os';import{fileURLToPath}from'node:url';
 import{MonitoringService}from'../server/service.mjs';import{productInput}from'../server/model.mjs';
-async function fixture(fn){const data=await mkdtemp(join(tmpdir(),'vigia-edits-'));const registry={products:[productInput({store:'ml',url:'https://produto.mercadolivre.com.br/MLB-1001-_JM',name:'Original',quantity:1,target:100,alert:true})]};const service=new MonitoringService({registry,save:async()=>{},projectRoot:process.env.MONITOR_PROJECT_ROOT,dataDirectory:data,notifier:async()=>{}});try{await fn(service,registry,data);}finally{await service.close();await rm(data,{recursive:true,force:true});}}
+const projectRoot = process.env.MONITOR_PROJECT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+async function fixture(fn){const data=await mkdtemp(join(tmpdir(),'vigia-edits-'));const registry={products:[productInput({store:'ml',url:'https://produto.mercadolivre.com.br/MLB-1001-_JM',name:'Original',quantity:1,target:100,alert:true})]};const service=new MonitoringService({registry,save:async()=>{},projectRoot,dataDirectory:data,notifier:async()=>{}});try{await fn(service,registry,data);}finally{await service.close();await rm(data,{recursive:true,force:true});}}
 test('edits saved in a running cycle stay pending and merge until the next cycle',()=>fixture(async(s,r)=>{
  s.shops.ml.status='running';const id=r.products[0].id;const first=await s.prepareCycle('ml');
  await s.edit(id,{quantity:3,target:80});await s.edit(id,{name:'Editado'});

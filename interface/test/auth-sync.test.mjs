@@ -3,11 +3,40 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApplication } from '../server.mjs';
+import { applyRemoteUserData, createApplication } from '../server.mjs';
+import { AuthClient } from '../server/auth-client.mjs';
+import { validateTarListing } from '../server/updater.mjs';
 import { createVpsServer } from '../../vps-server/server.mjs';
+
+async function completeOAuthLogin(localUrl, vpsBaseUrl, googleCode = 'g-code') {
+  const s0 = await (await fetch(`${localUrl}/api/state`)).json();
+  assert.equal(s0.auth.loginUrl, '/api/auth/start');
+  const localStartRes = await fetch(`${localUrl}${s0.auth.loginUrl}`, { redirect: 'manual' });
+  assert.equal(localStartRes.status, 302);
+  const vpsStartUrl = localStartRes.headers.get('location');
+  assert.ok(vpsStartUrl.startsWith(`${vpsBaseUrl}/auth/google/start?callback=`));
+
+  const vpsStartRes = await fetch(vpsStartUrl, { redirect: 'manual' });
+  assert.equal(vpsStartRes.status, 302);
+  const stateParam = new URL(vpsStartRes.headers.get('location')).searchParams.get('state');
+
+  const vpsCbRes = await fetch(`${vpsBaseUrl}/auth/google/callback?code=${encodeURIComponent(googleCode)}&state=${encodeURIComponent(stateParam)}`, {
+    redirect: 'manual',
+  });
+  assert.equal(vpsCbRes.status, 302);
+  const localCallbackUrl = vpsCbRes.headers.get('location');
+  assert.ok(localCallbackUrl.startsWith(`${localUrl}/api/auth/callback?`));
+  assert.ok(new URL(localCallbackUrl).searchParams.get('local_state'));
+  assert.ok(new URL(localCallbackUrl).searchParams.get('code'));
+
+  const localCbRes = await fetch(localCallbackUrl, { redirect: 'manual' });
+  assert.equal(localCbRes.status, 302);
+  assert.equal(localCbRes.headers.get('location'), '/');
+  return localCallbackUrl;
+}
 
 test('Vigia local integrates with VPS Google OAuth and syncs products and settings across instances', async () => {
   const vps = createVpsServer({
@@ -36,11 +65,15 @@ test('Vigia local integrates with VPS Google OAuth and syncs products and settin
     await new Promise(resolve => app1.server.listen(0, '127.0.0.1', resolve));
     const local1 = `http://127.0.0.1:${app1.server.address().port}`;
 
-    // 1. Antes do login, state mostra enabled=true, authenticated=false
+    // 1. Antes do login, state mostra enabled=true, authenticated=false e oculta dados sensíveis
     const stateBefore = await (await fetch(`${local1}/api/state`)).json();
     assert.equal(stateBefore.auth.enabled, true);
     assert.equal(stateBefore.auth.authenticated, false);
-    assert.ok(stateBefore.auth.loginUrl.startsWith(`${vpsBaseUrl}/auth/google/start`));
+    assert.equal(stateBefore.auth.loginUrl, '/api/auth/start');
+    assert.deepEqual(stateBefore.products, []);
+
+    const historyBlocked = await fetch(`${local1}/api/availability-history`);
+    assert.equal(historyBlocked.status, 401);
 
     // Mutações bloqueadas antes do login
     const blockedRes = await fetch(`${local1}/api/products`, {
@@ -50,21 +83,8 @@ test('Vigia local integrates with VPS Google OAuth and syncs products and settin
     });
     assert.equal(blockedRes.status, 401);
 
-    // 2. Simula fluxo OAuth completo (VPS -> Google -> VPS -> localhost callback)
-    const startRes = await fetch(stateBefore.auth.loginUrl, { redirect: 'manual' });
-    assert.equal(startRes.status, 302);
-    const stateParam = new URL(startRes.headers.get('location')).searchParams.get('state');
-
-    const vpsCbRes = await fetch(`${vpsBaseUrl}/auth/google/callback?code=g-code&state=${encodeURIComponent(stateParam)}`, {
-      redirect: 'manual',
-    });
-    assert.equal(vpsCbRes.status, 302);
-    const localCallbackUrl = vpsCbRes.headers.get('location');
-    assert.ok(localCallbackUrl.startsWith(`${local1}/api/auth/callback?code=`));
-
-    const localCbRes = await fetch(localCallbackUrl, { redirect: 'manual' });
-    assert.equal(localCbRes.status, 302);
-    assert.equal(localCbRes.headers.get('location'), '/');
+    // 2. Simula fluxo OAuth completo com local_state anti-CSRF
+    await completeOAuthLogin(local1, vpsBaseUrl, 'g-code');
 
     // 3. Agora está autenticado e pode adicionar produto + alterar configurações
     const stateAfter = await (await fetch(`${local1}/api/state`)).json();
@@ -98,14 +118,7 @@ test('Vigia local integrates with VPS Google OAuth and syncs products and settin
     await new Promise(resolve => app2.server.listen(0, '127.0.0.1', resolve));
     const local2 = `http://127.0.0.1:${app2.server.address().port}`;
 
-    const s2 = await (await fetch(`${local2}/api/state`)).json();
-    const start2 = await fetch(s2.auth.loginUrl, { redirect: 'manual' });
-    const state2 = new URL(start2.headers.get('location')).searchParams.get('state');
-    const vpsCb2 = await fetch(`${vpsBaseUrl}/auth/google/callback?code=g-code-2&state=${encodeURIComponent(state2)}`, {
-      redirect: 'manual',
-    });
-    const localCb2 = await fetch(vpsCb2.headers.get('location'), { redirect: 'manual' });
-    assert.equal(localCb2.status, 302);
+    await completeOAuthLogin(local2, vpsBaseUrl, 'g-code-2');
 
     const syncedState = await (await fetch(`${local2}/api/state`)).json();
     assert.equal(syncedState.products.length, 1);
@@ -150,11 +163,7 @@ test('allows offline access for up to 7 days when VPS is down and blocks after 7
     await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
     const localUrl = `http://127.0.0.1:${app.server.address().port}`;
 
-    const s0 = await (await fetch(`${localUrl}/api/state`)).json();
-    const startRes = await fetch(s0.auth.loginUrl, { redirect: 'manual' });
-    const stateParam = new URL(startRes.headers.get('location')).searchParams.get('state');
-    const vpsCb = await fetch(`${vpsBaseUrl}/auth/google/callback?code=c1&state=${encodeURIComponent(stateParam)}`, { redirect: 'manual' });
-    await fetch(vpsCb.headers.get('location'), { redirect: 'manual' });
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'c1');
 
     const s1 = await (await fetch(`${localUrl}/api/state`)).json();
     assert.equal(s1.auth.authenticated, true);
@@ -185,7 +194,7 @@ test('allows offline access for up to 7 days when VPS is down and blocks after 7
     await app.close();
     app = null;
 
-    // 4. 8 dias depois da última verificação online -> bloqueado!
+    // 4. 8 dias depois da última verificação online -> bloqueado e sessão/dados limpos!
     currentTime += 5 * DAY;
     app = await createApplication({ dataDirectory: dataDir, vpsUrl: vpsBaseUrl, authNow: now });
     await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
@@ -194,6 +203,7 @@ test('allows offline access for up to 7 days when VPS is down and blocks after 7
     const sExpired = await (await fetch(`${localExpired}/api/state`)).json();
     assert.equal(sExpired.auth.authenticated, false);
     assert.equal(sExpired.auth.offlineExpired, true);
+    assert.deepEqual(sExpired.products, []);
   } finally {
     if (app) await app.close();
     await vps.close().catch(() => {});
@@ -261,11 +271,7 @@ test('automatically downloads, verifies SHA-256, and installs published VPS upda
     const localUrl = `http://127.0.0.1:${app.server.address().port}`;
 
     // Faz login -> dispara auto-update automaticamente
-    const s0 = await (await fetch(`${localUrl}/api/state`)).json();
-    const startRes = await fetch(s0.auth.loginUrl, { redirect: 'manual' });
-    const stateParam = new URL(startRes.headers.get('location')).searchParams.get('state');
-    const vpsCb = await fetch(`${vpsBaseUrl}/auth/google/callback?code=u1&state=${encodeURIComponent(stateParam)}`, { redirect: 'manual' });
-    await fetch(vpsCb.headers.get('location'), { redirect: 'manual' });
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'u1');
 
     await restartPromise;
     assert.equal(restartedManifest.version, '0.12.0');
@@ -304,6 +310,7 @@ test('allows GET / top-level navigation with Sec-Fetch-Site: cross-site after OA
     });
     assert.equal(rootRes.status, 200);
     assert.match(rootRes.headers['content-type'] ?? '', /text\/html/);
+    assert.doesNotMatch(rootRes.headers['content-security-policy'] ?? '', /img-src[^;]*data:/);
 
     // Requisição cross-site para / sem sec-fetch-mode: navigate continua bloqueada
     const rootNonNav = await rawGet(port, '/', {
@@ -323,4 +330,392 @@ test('allows GET / top-level navigation with Sec-Fetch-Site: cross-site after OA
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test('instant allowlist revocation via heartbeat stops monitoring, clears local state, and hides /api/state products', async () => {
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['admin@gmail.com'],
+    oauthExchange: async () => ({
+      googleSub: 'sub-user-revoked',
+      email: 'revogado@gmail.com',
+      name: 'Revogado',
+      picture: 'https://lh3.googleusercontent.com/rev.png',
+    }),
+  });
+  vps.db.addAllowedEmail('revogado@gmail.com', { role: 'user', addedBy: 'admin@gmail.com' });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-revoke-'));
+
+  let adapterStopped = false;
+  let app;
+  try {
+    app = await createApplication({
+      dataDirectory: dataDir,
+      vpsUrl: vpsBaseUrl,
+      heartbeatIntervalMs: 80,
+      adapters: {
+        amazon: async ({ signal, onStatus }) => {
+          onStatus('running', 'Monitorando');
+          await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+          adapterStopped = true;
+        },
+        ml: async () => {},
+      },
+    });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app.server.address().port}`;
+
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'rev-1');
+    const s1 = await (await fetch(`${localUrl}/api/state`)).json();
+    await fetch(`${localUrl}/api/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vigia-Token': s1.token },
+      body: JSON.stringify({ store: 'amazon', url: 'https://www.amazon.com.br/dp/B09V3KXJPB', name: 'Item Revogado' }),
+    });
+    const startRes = await fetch(`${localUrl}/api/monitor/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vigia-Token': s1.token },
+      body: '{}',
+    });
+    assert.equal(startRes.status, 200);
+    assert.equal((await (await fetch(`${localUrl}/api/state`)).json()).running, true);
+
+    // Admin revoga usuário na VPS -> heartbeat detecta 401, para o monitoramento e limpa dados locais
+    vps.db.removeAllowedEmail('revogado@gmail.com');
+
+    const deadline = Date.now() + 3000;
+    let stateAfter;
+    while (Date.now() < deadline) {
+      stateAfter = await (await fetch(`${localUrl}/api/state`)).json();
+      if (!stateAfter.auth.authenticated && !stateAfter.running && adapterStopped) break;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    assert.equal(adapterStopped, true);
+    assert.equal(stateAfter.running, false);
+    assert.equal(stateAfter.auth.authenticated, false);
+    assert.deepEqual(stateAfter.products, []);
+    assert.deepEqual(stateAfter.purchases.orders, []);
+    assert.equal((await fetch(`${localUrl}/api/availability-history`)).status, 401);
+
+    // POST /api/monitor/start também bloqueia quando revogado
+    const startBlocked = await fetch(`${localUrl}/api/monitor/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vigia-Token': s1.token },
+      body: '{}',
+    });
+    assert.equal(startBlocked.status, 401);
+  } finally {
+    if (app) await app.close();
+    await vps.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('account isolation (ownerUserId) wipes previous user local data when another Google account logs in', async () => {
+  let activeProfile = {
+    googleSub: 'sub-user-a',
+    email: 'user-a@gmail.com',
+    name: 'User A',
+    picture: 'https://lh3.googleusercontent.com/a.png',
+  };
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['user-a@gmail.com', 'user-b@gmail.com'],
+    oauthExchange: async () => activeProfile,
+  });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-isolation-'));
+
+  let app;
+  try {
+    app = await createApplication({ dataDirectory: dataDir, vpsUrl: vpsBaseUrl, heartbeatIntervalMs: 0 });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app.server.address().port}`;
+
+    // Conta A entra e salva dados locais + na VPS
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'code-a');
+    const stateA = await (await fetch(`${localUrl}/api/state`)).json();
+    await fetch(`${localUrl}/api/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vigia-Token': stateA.token },
+      body: JSON.stringify({ store: 'amazon', url: 'https://www.amazon.com.br/dp/B09V3KXJPB', name: 'Segredo Conta A' }),
+    });
+    app.service.registry.availabilityHistory.push({ id: 'h1', productId: 'p1', at: new Date().toISOString(), product: { store: 'amazon' }, filters: {} });
+    assert.equal(app.service.registry.ownerUserId, stateA.auth.user.id);
+
+    // Simula troca direta de conta sem logout explícito (ex.: sessão expirada e Conta B entra no mesmo PC)
+    await app.authClient.clearSession();
+    activeProfile = {
+      googleSub: 'sub-user-b',
+      email: 'user-b@gmail.com',
+      name: 'User B',
+      picture: 'https://lh3.googleusercontent.com/b.png',
+    };
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'code-b');
+
+    const stateB = await (await fetch(`${localUrl}/api/state`)).json();
+    assert.equal(stateB.auth.user.email, 'user-b@gmail.com');
+    assert.deepEqual(stateB.products, []);
+    assert.equal(app.service.registry.availabilityHistory.length, 0);
+    assert.equal(app.service.registry.ownerUserId, stateB.auth.user.id);
+    // Garante que Conta B não vazou produtos da Conta A para a VPS
+    const vpsDataB = vps.db.getUserData(stateB.auth.user.id);
+    assert.deepEqual(vpsDataB.products, []);
+  } finally {
+    if (app) await app.close();
+    await vps.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('Login CSRF protection rejects /api/auth/callback with missing, forged, or replayed local_state', async () => {
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['csrf@gmail.com'],
+    oauthExchange: async () => ({
+      googleSub: 'sub-csrf',
+      email: 'csrf@gmail.com',
+      name: 'CSRF',
+      picture: '',
+    }),
+  });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-csrf-'));
+  let app;
+  try {
+    app = await createApplication({ dataDirectory: dataDir, vpsUrl: vpsBaseUrl, heartbeatIntervalMs: 0 });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app.server.address().port}`;
+
+    // Sem local_state
+    const missing = await fetch(`${localUrl}/api/auth/callback?code=fake-code`, { redirect: 'manual' });
+    assert.equal(missing.status, 400);
+
+    // local_state forjado
+    const forged = await fetch(`${localUrl}/api/auth/callback?code=fake-code&local_state=forged-value`, { redirect: 'manual' });
+    assert.equal(forged.status, 400);
+
+    // Login legítimo consome local_state -> replay do mesmo URL é rejeitado
+    const usedCallbackUrl = await completeOAuthLogin(localUrl, vpsBaseUrl, 'csrf-ok');
+    const replay = await fetch(usedCallbackUrl, { redirect: 'manual' });
+    assert.equal(replay.status, 400);
+  } finally {
+    if (app) await app.close();
+    await vps.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('applyRemoteUserData enforces product field whitelist and blocks mass assignment', () => {
+  const fakeService = { registry: { products: [], settings: null }, settings: null };
+  const changed = applyRemoteUserData(fakeService, {
+    exists: true,
+    products: [
+      {
+        id: 'valid-id-1',
+        store: 'amazon',
+        url: 'https://www.amazon.com.br/dp/B09V3KXJPB',
+        name: 'Seguro',
+        target: 150,
+        quantity: 2,
+        alert: true,
+        auto: true,
+        // Campos efêmeros / injeções proibidas:
+        price: 1,
+        available: true,
+        imageUrl: 'https://evil.example/xss.png',
+        mlConfirmation: { confirmed: { available: true } },
+        amazonOffers: [{ precoNormalCentavos: 100 }],
+        injectedField: 'malicious',
+      },
+      {
+        id: '../bad-id',
+        store: 'amazon',
+        url: 'https://www.amazon.com.br/dp/B000000001',
+        name: 'ID Invalido',
+      },
+    ],
+  });
+  assert.equal(changed, true);
+  assert.equal(fakeService.registry.products.length, 1);
+  const p = fakeService.registry.products[0];
+  assert.equal(p.id, 'valid-id-1');
+  assert.equal(p.name, 'Seguro');
+  assert.equal(p.target, 150);
+  assert.equal(p.quantity, 2);
+  assert.equal(p.alert, true);
+  assert.equal(p.auto, true);
+  assert.equal(p.price, null);
+  assert.equal(p.available, null);
+  assert.equal(p.imageUrl, undefined);
+  assert.equal(p.mlConfirmation, undefined);
+  assert.equal(p.amazonOffers, undefined);
+  assert.equal(p.injectedField, undefined);
+});
+
+test('offline edits persist pendingSync (0o600) and push to VPS before pulling on reconnect', async () => {
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['sync@gmail.com'],
+    oauthExchange: async () => ({
+      googleSub: 'sub-sync',
+      email: 'sync@gmail.com',
+      name: 'Sync User',
+      picture: '',
+    }),
+  });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-pending-sync-'));
+
+  let vpsReachable = true;
+  const controlledFetch = (url, opts) => {
+    if (!vpsReachable) return Promise.reject(new Error('ECONNREFUSED'));
+    return fetch(url, opts);
+  };
+
+  let app;
+  try {
+    app = await createApplication({
+      dataDirectory: dataDir,
+      vpsUrl: vpsBaseUrl,
+      authFetch: controlledFetch,
+      heartbeatIntervalMs: 80,
+    });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app.server.address().port}`;
+
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'sync-1');
+    const st = await (await fetch(`${localUrl}/api/state`)).json();
+
+    // Verifica permissão 0o600 do arquivo auth-session.json
+    const sessionStat = await stat(join(dataDir, 'auth-session.json'));
+    assert.equal(sessionStat.mode & 0o777, 0o600);
+
+    // VPS cai -> usuário adiciona produto offline -> pendingSync = true persistido em disco
+    vpsReachable = false;
+    const addRes = await fetch(`${localUrl}/api/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Vigia-Token': st.token },
+      body: JSON.stringify({ store: 'amazon', url: 'https://www.amazon.com.br/dp/B09V3KXJPB', name: 'Criado Offline' }),
+    });
+    assert.equal(addRes.status, 200);
+    const savedSession = JSON.parse(await readFile(join(dataDir, 'auth-session.json'), 'utf8'));
+    assert.equal(savedSession.pendingSync, true);
+
+    // VPS volta online -> heartbeat faz pushUserData ANTES de pullUserData e preserva o produto criado offline
+    vpsReachable = true;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const current = await (await fetch(`${localUrl}/api/state`)).json();
+      if (!current.auth.pendingSync && !current.auth.offlineMode) break;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+
+    const remoteAfter = vps.db.getUserData(st.auth.user.id);
+    assert.equal(remoteAfter.products.length, 1);
+    assert.equal(remoteAfter.products[0].name, 'Criado Offline');
+    // Garante que apenas campos da whitelist foram enviados para a VPS
+    assert.equal(remoteAfter.products[0].price, undefined);
+    assert.equal(remoteAfter.products[0].available, undefined);
+  } finally {
+    if (app) await app.close();
+    await vps.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('AutoUpdater blocks Tar Slip paths and symlinks before extraction; AuthClient enforces HTTPS', async () => {
+  // Validação unitária de Tar Slip, caminhos absolutos e symlinks/hardlinks
+  assert.throws(() => validateTarListing('lrwxrwxrwx user/group 0 2026-11-26 08:00 evil -> /etc/passwd'), /links simbólicos/);
+  assert.throws(() => validateTarListing('hrw-r--r-- user/group 0 2026-11-26 08:00 hard link to target'), /links simbólicos/);
+  assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 ../../escape.txt'), /Tar Slip/);
+  assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 /etc/passwd'), /caminho absoluto/);
+  assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 C:\\Windows\\win.ini'), /caminho absoluto/);
+
+  // AuthClient rejeita HTTP não-local
+  assert.throws(() => new AuthClient({ dataDirectory: tmpdir(), vpsUrl: 'http://evil.example.com' }), /HTTPS/);
+  assert.doesNotThrow(() => new AuthClient({ dataDirectory: tmpdir(), vpsUrl: 'https://vigia.example.com' }));
+  assert.doesNotThrow(() => new AuthClient({ dataDirectory: tmpdir(), vpsUrl: 'http://127.0.0.1:4400' }));
+
+  // Teste real com arquivo tar.gz contendo symlink via AutoUpdater
+  const releasesDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-rel-'));
+  const pkgSrcDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-src-'));
+  const targetDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-tgt-'));
+  const dataDir = join(targetDir, '.data');
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(join(targetDir, 'package.json'), JSON.stringify({ version: '0.11.0' }), 'utf8');
+  await symlink('/etc/hosts', join(pkgSrcDir, 'evil-link'));
+  const archiveName = 'vigia-0.13.0.tar.gz';
+  const archivePath = join(releasesDir, archiveName);
+  execFileSync('tar', ['-czf', archivePath, '-C', pkgSrcDir, '.']);
+  const sha256 = createHash('sha256').update(await readFile(archivePath)).digest('hex');
+  await writeFile(join(releasesDir, 'latest.json'), JSON.stringify({
+    version: '0.13.0',
+    filename: archiveName,
+    sha256,
+    notes: 'Malicious',
+    publishedAt: new Date().toISOString(),
+  }), 'utf8');
+
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    releasesDir,
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['tarslip@gmail.com'],
+    oauthExchange: async () => ({
+      googleSub: 'sub-tarslip',
+      email: 'tarslip@gmail.com',
+      name: 'TarSlip',
+      picture: '',
+    }),
+  });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+  let restarted = false;
+  let app;
+  try {
+    app = await createApplication({
+      dataDirectory: dataDir,
+      vpsUrl: vpsBaseUrl,
+      updateTargetDirectory: targetDir,
+      currentVersion: '0.11.0',
+      heartbeatIntervalMs: 0,
+      onRestart: async () => { restarted = true; },
+    });
+    await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app.server.address().port}`;
+
+    await completeOAuthLogin(localUrl, vpsBaseUrl, 'ts-1');
+    const applied = await app.updater.checkAndApply();
+    assert.equal(applied, false);
+    assert.equal(restarted, false);
+    assert.equal(app.updater.state().status, 'error');
+    assert.match(app.updater.state().error, /links simbólicos|Tar Slip|segurança/i);
+  } finally {
+    if (app) await app.close();
+    await vps.close();
+    await rm(releasesDir, { recursive: true, force: true });
+    await rm(pkgSrcDir, { recursive: true, force: true });
+    await rm(targetDir, { recursive: true, force: true });
+  }
+});
+
 

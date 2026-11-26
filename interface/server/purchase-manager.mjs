@@ -100,7 +100,7 @@ export class PurchaseManager {
         if(error.diagnosticWarning)order.failure.diagnosticWarning=error.diagnosticWarning;
         order.message=(/timed out|timeout/i.test(detail)?'Tempo limite de comunicação com o Chrome. Etapa: '+step:detail).slice(0,350)+(uncertain?' Verifique '+ordersPage(order.store)+'. Não haverá nova tentativa automática.':'');order.updatedAt=new Date().toISOString();
         await this.save(this.registry);
-        await this.notify({id:randomUUID(),title:uncertain?'Vigia · confira o pedido':'Vigia · compra interrompida',message:order.message});
+        await this.notify({id:randomUUID(),title:uncertain?'Vigia · confira o pedido':'Vigia · compra interrompida',message:order.message}).catch(()=>{});
       }finally{resumeMonitoring?.();}
     };
     this.task=Promise.resolve().then(work).catch(error=>{this.failure=String(error.message);order.message='Falha de persistência: '+this.failure;order.status='UNCERTAIN';}).finally(()=>{this.task=null;this.controller=null;});

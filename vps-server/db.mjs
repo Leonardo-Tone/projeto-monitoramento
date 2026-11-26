@@ -20,6 +20,7 @@ export function openDatabase(dbPath) {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
   const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA busy_timeout = 5000;');
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
 
@@ -180,6 +181,14 @@ export function openDatabase(dbPath) {
       const now = Date.now();
       db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(new Date(now).toISOString());
       db.prepare(`
+        DELETE FROM oauth_states
+        WHERE state IN (
+          SELECT state FROM oauth_states
+          ORDER BY created_at DESC
+          LIMIT -1 OFFSET 499
+        )
+      `).run();
+      db.prepare(`
         INSERT INTO oauth_states (state, code_verifier, callback_url, created_at, expires_at)
         VALUES (?, ?, ?, ?, ?)
       `).run(state, codeVerifier, callbackUrl, new Date(now).toISOString(), new Date(now + ttlSeconds * 1000).toISOString());
@@ -219,6 +228,7 @@ export function openDatabase(dbPath) {
       const now = Date.now();
       const expiresAt = new Date(now + ttlDays * 24 * 60 * 60 * 1000).toISOString();
       const nowStr = new Date(now).toISOString();
+      db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(nowStr);
       db.prepare(`
         INSERT INTO sessions (token_hash, user_id, device_label, created_at, expires_at, last_seen_at)
         VALUES (?, ?, ?, ?, ?, ?)

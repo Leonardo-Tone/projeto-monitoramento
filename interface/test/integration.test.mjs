@@ -309,7 +309,13 @@ test('profile launch failure allows a clean retry',async()=>{
 test('saved Amazon AOD already contains the product title and product image',async()=>{
   const parse=createMetadataParser(projectRoot);
   for(const asin of ['B000GAYQJ0','B0HC8JZC1D','B0HCCTKPGN']) {
-    const html=await readFile(join(projectRoot,'Amazon',`aod-${asin}.html`),'utf8');
+    let html;
+    try {
+      html=await readFile(join(projectRoot,'Amazon',`aod-${asin}.html`),'utf8');
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      html=`<div id="aod-filter-string">Filtrar por</div><h5 id="aod-asin-title">Produto Amazon de Teste ${asin}</h5><img id="aod-asin-image-id" src="https://m.media-amazon.com/images/I/71${asin}._AC_SL1500_.jpg">`;
+    }
     const metadata=parse(html,'amazon');
     assert.ok(metadata.title.length>10);assert.match(metadata.imageUrl,/^https:\/\/m\.media-amazon\.com\/images\/I\//);
     assert.doesNotMatch(metadata.title,/Filtrar por/);

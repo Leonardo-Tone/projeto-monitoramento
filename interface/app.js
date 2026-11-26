@@ -50,7 +50,7 @@ let connected=false;
 let serviceOutdated=false;
 const requiredApiVersion=18;
 const displayName=product=>product.name?.trim()||product.title||product.code;
-const outdatedServiceMessage='Encerre a instância anterior do Vigia e execute INICIAR-PAINEL.cmd novamente.';
+const outdatedServiceMessage='Reinicie o Vigia para atualizar o serviço local.';
 let toastTimer;
 const seenEvents=new Set();
 const failedImages=new Set();
@@ -61,7 +61,7 @@ function toast(message){clearTimeout(toastTimer);$('toast').textContent=message;
 async function api(path,method='GET',body){
   const response=await fetch('/api/'+path,{method,headers:method==='GET'?{}:{'Content-Type':'application/json','X-Vigia-Token':token},body:method==='GET'?undefined:JSON.stringify(body??{}),cache:'no-store'});
   const result=await response.json();
-  if(!response.ok)throw new Error(response.status===404&&path==='settings'?'O serviço está desatualizado. Feche a janela do serviço e execute INICIAR-PAINEL.cmd novamente.':result.error??'O serviço local não respondeu.');
+  if(!response.ok)throw new Error(response.status===404&&path==='settings'?'O serviço local está desatualizado. Reinicie o Vigia para reconectar.':result.error??'O serviço local não respondeu.');
   return result;
 }
 function applyState(next){
@@ -106,7 +106,7 @@ function productCard(p) {
   const status = p.error ? ['unknown','Leitura desatualizada'] : p.rawAvailable===true&&p.eligible===false ? ['unavailable','Fora do filtro'] : p.available === true ? ['available','Disponível'] : p.available === false ? ['unavailable','Indisponível'] : ['unknown',p.observation==='identity_mismatch'?'Oferta divergente':p.observation==='unknown_identity'?'Identidade não confirmada':p.lastCheckedAt?'Não observado':'Aguardando consulta'];
   const price = p.price === null ? '<div class="price empty">Preço não informado</div>' : `<div class="price"><small>R$</small>${money.format(p.price)}</div>`;
   return `<article class="product-card ${p.error?'has-error':''}" data-product="${escapeHtml(p.id)}" aria-label="${escapeHtml(displayName(p))}">
-    <div class="product-main"><div class="product-art ${escapeHtml(p.art)}">${p.imageUrl&&!failedImages.has(p.imageUrl)?`<img class="product-photo" src="${escapeHtml(p.imageUrl)}" alt="${escapeHtml(displayName(p))}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`:''}${artwork(p.art)}</div><div class="product-info"><div class="product-tags"><span class="store-name ${p.store==='amazon'?'amazon':'ml'}">${storeNames[p.store]}</span><span class="sku">${escapeHtml(p.code)}</span>${p.pendingEdit?'<span class="sample-label">Alteração salva · próximo ciclo</span>':''}${p.sample?'<span class="sample-label">EXEMPLO</span>':''}</div><h3 class="product-title" title="${escapeHtml(displayName(p))}">${escapeHtml(displayName(p))}</h3><div class="seller-info"><span>${svg('shop')}Vendido por <strong>${escapeHtml(p.seller)}</strong></span><span>${svg('truck')}Entregue por <strong>${escapeHtml(p.delivery)}</strong></span>${p.store==='ml'?`<span class="reputation-label">Reputação: <strong>${escapeHtml(reputationLabel(p))}</strong>${p.sellerInfoSource==='saved-test-html'?' · HTML salvo':''}</span>`:''}</div><div class="last-check">${svg('clock')}<span>Último monitoramento: <strong>${escapeHtml(formatTime(p.lastCheckedAt))}</strong></span>${p.error?'<span class="stale-tag">Desatualizado</span>':''}${p.eligibilityReason?`<span class="eligibility-note">${escapeHtml(p.eligibilityReason)}</span>`:''}</div>${p.error?`<div class="product-error">Tentativa em ${escapeHtml(formatTime(p.lastAttemptAt))}: ${escapeHtml(p.error)}</div>`:''}</div><div class="price-area">${price}<div class="freight-note">Preço sem frete · ${p.freight==null?'frete não informado':'frete R$ '+money.format(p.freight)}</div><span class="badge ${status[0]}"><i class="status-dot ${p.available===true?'green':''}"></i>${status[1]}</span></div><div class="product-actions">${p.url?`<a class="icon-button" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir ${escapeHtml(displayName(p))} na loja" title="Abrir na loja">${svg('external')}</a>`:''}<button class="icon-button" data-action="history" data-id="${escapeHtml(p.id)}" title="Histórico de disponibilidade" aria-label="Histórico de disponibilidade de ${escapeHtml(displayName(p))}">${svg('clock')}</button><button class="icon-button" ${productEditLocked()?'disabled':''} data-action="edit" data-id="${escapeHtml(p.id)}" aria-label="Editar ${escapeHtml(displayName(p))}" title="Editar produto">${svg('edit')}</button><button class="icon-button delete-button" ${isLocked()?'disabled':''} data-action="remove" data-id="${escapeHtml(p.id)}" aria-label="Remover ${escapeHtml(displayName(p))}" title="Remover produto">${svg('trash')}</button></div></div>
+    <div class="product-main"><div class="product-art ${escapeHtml(p.art)}">${p.imageUrl&&!failedImages.has(p.imageUrl)?`<img class="product-photo" src="${escapeHtml(p.imageUrl)}" alt="${escapeHtml(displayName(p))}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`:''}${artwork(p.art)}</div><div class="product-info"><div class="product-tags"><span class="store-name ${p.store==='amazon'?'amazon':'ml'}">${storeNames[p.store]}</span><span class="sku">${escapeHtml(p.code)}</span>${p.pendingEdit?'<span class="sample-label">Alteração salva · próximo ciclo</span>':''}${p.sample?'<span class="sample-label">EXEMPLO</span>':''}</div><h3 class="product-title" title="${escapeHtml(displayName(p))}">${escapeHtml(displayName(p))}</h3><div class="seller-info"><span>${svg('shop')}Vendido por <strong>${escapeHtml(p.seller)}</strong></span><span>${svg('truck')}Entregue por <strong>${escapeHtml(p.delivery)}</strong></span>${p.store==='ml'?`<span class="reputation-label">Reputação: <strong>${escapeHtml(reputationLabel(p))}</strong></span>`:''}</div><div class="last-check">${svg('clock')}<span>Último monitoramento: <strong>${escapeHtml(formatTime(p.lastCheckedAt))}</strong></span>${p.error?'<span class="stale-tag">Desatualizado</span>':''}${p.eligibilityReason?`<span class="eligibility-note">${escapeHtml(p.eligibilityReason)}</span>`:''}</div>${p.error?`<div class="product-error">Tentativa em ${escapeHtml(formatTime(p.lastAttemptAt))}: ${escapeHtml(p.error)}</div>`:''}</div><div class="price-area">${price}<div class="freight-note">Preço sem frete · ${p.freight==null?'frete não informado':'frete R$ '+money.format(p.freight)}</div><span class="badge ${status[0]}"><i class="status-dot ${p.available===true?'green':''}"></i>${status[1]}</span></div><div class="product-actions">${p.url?`<a class="icon-button" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir ${escapeHtml(displayName(p))} na loja" title="Abrir na loja">${svg('external')}</a>`:''}<button class="icon-button" data-action="history" data-id="${escapeHtml(p.id)}" title="Histórico de disponibilidade" aria-label="Histórico de disponibilidade de ${escapeHtml(displayName(p))}">${svg('clock')}</button><button class="icon-button" ${productEditLocked()?'disabled':''} data-action="edit" data-id="${escapeHtml(p.id)}" aria-label="Editar ${escapeHtml(displayName(p))}" title="Editar produto">${svg('edit')}</button><button class="icon-button delete-button" ${isLocked()?'disabled':''} data-action="remove" data-id="${escapeHtml(p.id)}" aria-label="Remover ${escapeHtml(displayName(p))}" title="Remover produto">${svg('trash')}</button></div></div>
     <div class="product-controls">${switchControl(p,'alert','Alerta de disponibilidade','bell')}<span class="controls-divider"></span><label class="quantity-control">Quantidade<input class="quantity-input" type="number" min="1" max="100" step="1" data-action="quantity" data-id="${escapeHtml(p.id)}" value="${p.quantity??1}" ${productEditLocked()?'disabled':''} aria-label="Quantidade desejada para ${escapeHtml(displayName(p))}"></label><label class="target-control">Limite por unidade<span class="target-wrap"><span>R$</span><input class="target-input" ${productEditLocked()?'disabled':''} inputmode="decimal" maxlength="15" placeholder="Sem limite" data-action="target" data-id="${escapeHtml(p.id)}" value="${p.target===null?'':money.format(p.target)}" aria-label="Preço limite para ${escapeHtml(displayName(p))}"></span></label><span class="controls-divider"></span>${switchControl(p,'auto','Comprar automaticamente','bolt')}</div>
   </article>`;
 }
@@ -125,7 +125,6 @@ function updateStats(){
     $('count-'+store).textContent=counts.total+'/10';
   }
   $('add-top').disabled=!connected||busy||monitoring||products.length>=20;
-  $('import-products').disabled=!connected||busy||isLocked();
   $('empty-add').disabled=!connected||busy||isLocked();
   $('monitor-toggle').disabled=!connected||busy||(!monitoring&&!products.length);
   $('notification-test').disabled=!connected||busy;
@@ -150,7 +149,7 @@ function render(){
   }
   productList.style.setProperty('--product-rows',String(productRows));
   $('empty-state').hidden=visible.length>0;
-  $('empty-message').textContent=query?'Nenhum resultado para essa busca. Tente outro nome.':$('available-only').checked?'Nenhum produto disponível atende aos filtros atuais.':'Adicione um produto ou carregue os anúncios já usados nos testes do projeto.';
+  $('empty-message').textContent=query?'Nenhum resultado para essa busca. Tente outro nome.':$('available-only').checked?'Nenhum produto disponível atende aos filtros atuais.':'Adicione um produto para começar a monitorar preços e disponibilidade.';
   $('empty-add').hidden=Boolean(query)||$('available-only').checked;
   $('list-summary').textContent=`Mostrando ${visible.length} de ${products.length} produto${products.length===1?'':'s'}`;
   updateStats();
@@ -167,12 +166,16 @@ function updateMonitor(){
   const reconnecting=Object.values(shops).some(s=>s.status==='reconnecting');
   const stopping=Object.values(shops).some(s=>s.status==='stopping');
   const paused=state?.monitoringPaused===true;
+  const connectionPill=$('connection-pill');
+  if(connectionPill)connectionPill.innerHTML=connected?'<span class="status-dot green"></span> Conectado':'<span class="status-dot"></span> Desconectado';
+  const sidebarDot=$('sidebar-status-dot');
+  if(sidebarDot)sidebarDot.classList.toggle('green',connected);
   document.querySelector('.monitor-bar').classList.toggle('running',monitoring);
   document.querySelector('.monitor-console').classList.toggle('sweeping',connected&&monitoring&&!paused&&!starting&&!reconnecting&&!stopping);
   $('monitor-title').textContent=serviceOutdated?'Serviço precisa ser reiniciado':!connected?'Serviço local desconectado':stopping?'Encerrando monitoramento':reconnecting?'Reconectando o monitoramento':starting?'Preparando os monitores':paused?'Monitoramento pausado durante a compra':monitoring?'Monitoramento em andamento':errors.length?'Monitoramento requer atenção':'Tudo pronto para começar';
   $('monitor-state').textContent=!connected?'Offline':stopping?'Parando':reconnecting?'Reconectando':starting?'Iniciando':paused?'Pausado':monitoring?'Ativo':errors.length?'Interrompido':'Parado';
   $('monitor-state').className='badge '+(monitoring?'available':errors.length?'unavailable':'neutral');
-  $('monitor-description').textContent=serviceOutdated?outdatedServiceMessage:!connected?'Abra INICIAR-PAINEL.cmd para conectar o serviço local.':'Amazon e Mercado Livre · atualizações a cada 15 segundos';
+  $('monitor-description').textContent=serviceOutdated?outdatedServiceMessage:!connected?'Reinicie o Vigia para reconectar ao serviço local.':'Amazon e Mercado Livre · atualizações a cada 15 segundos';
   $('monitor-toggle').innerHTML=svg(monitoring?'stop':'play')+`<span>${monitoring?'Parar monitoramento':'Iniciar monitoramento'}</span>`;
   $('monitor-toggle').setAttribute('aria-pressed',String(monitoring));
   $('shop-status').innerHTML=['amazon','ml'].map(s=>`<div class="shop-status ${shops[s]?.status==='error'?'shop-error':''}"><strong>${storeNames[s]}</strong><span>${escapeHtml(shops[s]?.message??'Serviço não conectado.')}</span></div>`).join('');
@@ -187,7 +190,7 @@ function updateAccounts(){
     b.innerHTML=(preparing?'Encerrar preparação':'Abrir perfil')+svg('external');
     b.dataset.loginOpen=preparing?'true':'false';
     const status=b.closest('.account-session').querySelector('small');
-    status.textContent=preparing?'Perfil aberto · faça login':'Login não verificado';
+    status.innerHTML=`<span class="status-dot ${preparing?'green':''}"></span> ${preparing?'Perfil aberto · faça login':'Login não verificado'}`;
   });
 }
 function setTabs(){document.querySelectorAll('.store-tab').forEach(b=>{const selected=b.dataset.store===currentStore;b.classList.toggle('active',selected);b.setAttribute('aria-selected',String(selected));b.tabIndex=selected?0:-1;});}
@@ -267,7 +270,6 @@ $('monitor-toggle').addEventListener('click',async()=>{
   try{await action('monitor/'+(stopping?'stop':'start'));toast(stopping?'Monitoramento encerrado.':'Monitoramento solicitado. Acompanhe o estado de cada loja.');}
   catch(error){toast(error.message);}
 });
-$('import-products').addEventListener('click',async()=>{try{await action('import');toast('Lista do projeto carregada, sem duplicar os anúncios existentes.');}catch(error){toast(error.message);}});
 document.querySelectorAll('.account-login').forEach(b=>b.addEventListener('click',async()=>{
   const store=b.dataset.account==='Amazon'?'amazon':'ml';
   const purpose=b.dataset.purpose==='compra'?'purchase':'monitor';
@@ -278,10 +280,10 @@ document.querySelectorAll('.account-login').forEach(b=>b.addEventListener('click
   }catch(error){toast(error.message);}
 }));
 
+const reputationLevelLabels={'1_red':'Vermelha','2_orange':'Laranja','3_yellow':'Amarela','4_light_green':'Verde-claro','5_green':'Verde'};
+const reputationMedalLabels={silver:'MercadoLíder',gold:'MercadoLíder Gold',platinum:'MercadoLíder Platinum'};
 function reputationLabel(p){
-  const levels={'1_red':'Vermelha','2_orange':'Laranja','3_yellow':'Amarela','4_light_green':'Verde-claro','5_green':'Verde'};
-  const medals={silver:'MercadoLíder',gold:'MercadoLíder Gold',platinum:'MercadoLíder Platinum'};
-  return [levels[p.reputationLevel],medals[p.powerSellerStatus]].filter(Boolean).join(' · ')||'Não informada';
+  return [reputationLevelLabels[p.reputationLevel],reputationMedalLabels[p.powerSellerStatus]].filter(Boolean).join(' · ')||'Não informada';
 }
 function loadSettingsForm(){
   const rules=state?.settings;$('amazon-only').checked=rules?.amazon.onlyAmazon??false;
@@ -438,7 +440,7 @@ async function refresh(){
   catch{connected=false;updateStats();updateMonitor();}
 }
 hydrateIcons();setTabs();render();updateMonitor();
-if(location.protocol==='file:'){toast('Para usar o monitoramento real, abra INICIAR-PAINEL.cmd e acesse http://127.0.0.1:4318.');}
+if(location.protocol==='file:'){toast('Para usar o monitoramento real, abra o Vigia pelo aplicativo.');}
 else{refresh();setInterval(refresh,2000);}
 
 let historyRequest=0,historyEntries=[];
@@ -459,8 +461,11 @@ function renderAvailabilityHistory(){
  $('history-stats').innerHTML=`<span><strong>${entries.length}</strong> disponibilidades</span><span><strong>${new Set(entries.map(row=>row.productId)).size}</strong> produtos</span><span><strong>${priced.length?'R$ '+money.format(Math.min(...priced.map(row=>row.product.price))):'—'}</strong> menor preço no recorte</span>`;
   const field=(label,value)=>`<div><dt>${label}</dt><dd>${escapeHtml(value??'Não informado')}</dd></div>`;
   $('history-content').innerHTML=entries.length?entries.map(row=>{
-   const p=row.product,f=row.filters,filters=p.store==='amazon'?(f.onlyAmazon?'Somente vendidos e entregues pela Amazon':'Todas as ofertas Amazon elegíveis'):[f.requireReputation?'Reputação mínima: '+f.minReputation:null,f.requireLeader?'Medalha mínima: '+f.minLeader:null].filter(Boolean).join(f.matchMode==='any'?' OU ':' E ')||'Sem filtro de reputação';
-   return `<details class="history-entry"><summary><span><strong>${escapeHtml(displayName(p))}</strong><small>${escapeHtml(storeNames[p.store])} · ${row.type==='PRIMEIRA_OBSERVACAO_DISPONIVEL'?'Primeira observação disponível':'Disponibilidade confirmada'} · ${escapeHtml(formatTime(row.at))}</small></span><b>${p.price==null?'Preço não informado':'R$ '+money.format(p.price)}</b></summary><div class="history-entry-body"><h3>${escapeHtml(displayName(p))}</h3><p class="history-filters">Filtros na leitura: ${escapeHtml(filters)}</p><dl>${field('Plataforma',storeNames[p.store])}${field('Anúncio',p.code)}${field('Vendido por',p.seller)}${field('ID do vendedor',p.sellerId)}${field('Entregue por',p.delivery)}${field('Frete',p.freight==null?'Não informado':'R$ '+money.format(p.freight))}${field('Reputação',p.reputationLevel)}${field('MercadoLíder',p.powerSellerStatus)}${field('Quantidade configurada',p.quantity??1)}${field('Limite por unidade',p.target==null?'Sem limite':'R$ '+money.format(p.target))}</dl><p class="history-url">${escapeHtml(p.url)}</p></div></details>`;
+   const p=row.product,f=row.filters;
+   const minRepLabel=reputationLevelLabels[f.minReputation]??f.minReputation;
+   const minLeaderLabel=reputationMedalLabels[f.minLeader]??f.minLeader;
+   const filters=p.store==='amazon'?(f.onlyAmazon?'Somente vendidos e entregues pela Amazon':'Todas as ofertas Amazon elegíveis'):[f.requireReputation?'Reputação mínima: '+minRepLabel:null,f.requireLeader?'Medalha mínima: '+minLeaderLabel:null].filter(Boolean).join(f.matchMode==='any'?' OU ':' E ')||'Sem filtro de reputação';
+   return `<details class="history-entry"><summary><span><strong>${escapeHtml(displayName(p))}</strong><small>${escapeHtml(storeNames[p.store])} · ${row.type==='PRIMEIRA_OBSERVACAO_DISPONIVEL'?'Primeira observação disponível':'Disponibilidade confirmada'} · ${escapeHtml(formatTime(row.at))}</small></span><b>${p.price==null?'Preço não informado':'R$ '+money.format(p.price)}</b></summary><div class="history-entry-body"><h3>${escapeHtml(displayName(p))}</h3><p class="history-filters">Filtros na leitura: ${escapeHtml(filters)}</p><dl>${field('Plataforma',storeNames[p.store])}${field('Anúncio',p.code)}${field('Vendido por',p.seller)}${field('ID do vendedor',p.sellerId)}${field('Entregue por',p.delivery)}${field('Frete',p.freight==null?'Não informado':'R$ '+money.format(p.freight))}${field('Reputação',reputationLevelLabels[p.reputationLevel]??p.reputationLevel)}${field('MercadoLíder',reputationMedalLabels[p.powerSellerStatus]??p.powerSellerStatus)}${field('Quantidade configurada',p.quantity??1)}${field('Limite por unidade',p.target==null?'Sem limite':'R$ '+money.format(p.target))}</dl><p class="history-url">${escapeHtml(p.url)}</p></div></details>`;
   }).join(''):'<div class="purchase-empty"><div><strong>Nenhuma disponibilidade neste recorte</strong><p>Ajuste os filtros ou aguarde uma nova confirmação. O histórico começa nesta atualização e funciona mesmo com os alertas desativados.</p></div></div>';
 }
 
@@ -496,7 +501,7 @@ function updateAuth() {
   const syncNote = $('storage-sync-note');
   if (syncNote) {
     const synced = Boolean(auth?.enabled && auth.authenticated && !auth.offlineMode);
-    syncNote.innerHTML = `<span class="status-dot"></span> ${synced ? 'Sincronizado automaticamente' : 'Salvo localmente'}`;
+    syncNote.innerHTML = `<span class="status-dot ${synced ? 'green' : ''}"></span> ${synced ? 'Sincronizado automaticamente' : 'Salvo localmente'}`;
   }
 
   if (!auth || !auth.enabled) {
@@ -535,10 +540,12 @@ function updateAuth() {
   }
   const avatarEl = $('auth-user-avatar');
   if (avatarEl) {
-    if (auth.user?.picture) {
-      avatarEl.src = auth.user.picture;
+    const pic = auth.user?.picture;
+    if (typeof pic === 'string' && pic.startsWith('https://lh3.googleusercontent.com/')) {
+      avatarEl.src = pic;
       avatarEl.hidden = false;
     } else {
+      avatarEl.removeAttribute('src');
       avatarEl.hidden = true;
     }
   }

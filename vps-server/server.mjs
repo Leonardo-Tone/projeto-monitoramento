@@ -46,13 +46,25 @@ function renderHtmlPage({ title, heading, message, status = 'info' }) {
 export function isValidLocalCallback(rawUrl) {
   try {
     const parsed = new URL(rawUrl);
-    return (
-      parsed.protocol === 'http:' &&
-      parsed.hostname === '127.0.0.1' &&
-      parsed.pathname === '/api/auth/callback'
-    );
+    if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || parsed.pathname !== '/api/auth/callback') {
+      return false;
+    }
+    if (parsed.username || parsed.password || parsed.hash) return false;
+    if (!parsed.port || !/^\d+$/.test(parsed.port)) return false;
+    const port = Number(parsed.port);
+    return Number.isInteger(port) && port >= 1024 && port <= 65535;
   } catch {
     return false;
+  }
+}
+
+function safeDecodeParam(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    const err = new Error('Parâmetro de URL inválido.');
+    err.status = 400;
+    throw err;
   }
 }
 
@@ -99,18 +111,55 @@ export function createVpsServer({
   adminEmails = (process.env.ADMIN_EMAILS ?? '').split(',').map(s => s.trim()).filter(Boolean),
   sessionTtlDays = Number(process.env.SESSION_TTL_DAYS ?? 30) || 30,
   oauthExchange = exchangeGoogleCode,
+  rateLimit = {},
 } = {}) {
   const normalizedBaseUrl = publicBaseUrl.replace(/\/+$/, '');
   const redirectUri = `${normalizedBaseUrl}/auth/google/callback`;
   const db = openDatabase(dbPath);
   db.seedAdmins(adminEmails);
 
+  const rateLimitEnabled = rateLimit.enabled ?? true;
+  const rateLimitWindowMs = rateLimit.windowMs ?? 60_000;
+  const rateLimitAuthMax = rateLimit.authMax ?? 30;
+  const rateLimitApiMax = rateLimit.apiMax ?? 120;
+  const rateBuckets = new Map();
+
+  const checkRateLimit = (req, pathname) => {
+    if (!rateLimitEnabled) return { allowed: true };
+    const isAuthPath = pathname.startsWith('/auth/') || pathname === '/api/auth/exchange';
+    const isApiPath = pathname.startsWith('/api/');
+    if (!isAuthPath && !isApiPath) return { allowed: true };
+    const bucketGroup = isAuthPath ? 'auth' : 'api';
+    const max = isAuthPath ? rateLimitAuthMax : rateLimitApiMax;
+    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+    const ip = forwarded || req.socket?.remoteAddress || 'unknown';
+    const key = `${bucketGroup}:${ip}`;
+    const now = Date.now();
+    if (rateBuckets.size > 1000) {
+      for (const [k, entry] of rateBuckets) {
+        if (entry.resetAt <= now) rateBuckets.delete(k);
+      }
+    }
+    const existing = rateBuckets.get(key);
+    if (!existing || existing.resetAt <= now) {
+      rateBuckets.set(key, { count: 1, resetAt: now + rateLimitWindowMs });
+      return { allowed: true };
+    }
+    existing.count += 1;
+    if (existing.count > max) {
+      const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+      return { allowed: false, retryAfter };
+    }
+    return { allowed: true };
+  };
+
   const server = createServer(async (req, res) => {
-    const sendJson = (status, data) => {
+    const sendJson = (status, data, extraHeaders = {}) => {
       res.writeHead(status, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
+        ...extraHeaders,
       });
       res.end(JSON.stringify(data));
     };
@@ -120,12 +169,17 @@ export function createVpsServer({
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
       });
       res.end(html);
     };
 
     try {
       const url = new URL(req.url, normalizedBaseUrl);
+      const limitCheck = checkRateLimit(req, url.pathname);
+      if (!limitCheck.allowed) {
+        return sendJson(429, { error: 'Muitas requisições. Tente novamente em instantes.' }, { 'Retry-After': String(limitCheck.retryAfter) });
+      }
 
       if (req.method === 'GET' && url.pathname === '/health') {
         return sendJson(200, { ok: true, service: 'vigia-vps', oauthConfigured: Boolean(googleClientId && googleClientSecret) });
@@ -136,7 +190,7 @@ export function createVpsServer({
           return sendHtml(500, renderHtmlPage({
             title: 'Vigia · Configuração pendente',
             heading: 'Google OAuth não configurado',
-            message: 'Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no arquivo .env do servidor VPS.',
+            message: 'O login Google ainda não está configurado neste servidor.',
             status: 'error',
           }));
         }
@@ -203,10 +257,11 @@ export function createVpsServer({
             redirectUri,
           });
         } catch (err) {
+          console.error('[vps] Falha na troca OAuth com o Google:', err);
           return sendHtml(502, renderHtmlPage({
             title: 'Vigia · Erro ao validar conta',
             heading: 'Não foi possível validar sua conta Google',
-            message: err.message,
+            message: 'Ocorreu um erro temporário ao validar sua conta Google. Tente novamente em instantes.',
             status: 'error',
           }));
         }
@@ -292,6 +347,9 @@ export function createVpsServer({
           if (!Array.isArray(body.products)) {
             return sendJson(400, { error: 'O campo products deve ser uma lista.' });
           }
+          if (body.products.length > 100) {
+            return sendJson(400, { error: 'O limite máximo é de 100 produtos por conta.' });
+          }
           if (body.settings !== null && body.settings !== undefined && (typeof body.settings !== 'object' || Array.isArray(body.settings))) {
             return sendJson(400, { error: 'O campo settings deve ser um objeto.' });
           }
@@ -316,7 +374,7 @@ export function createVpsServer({
         }
 
         if (req.method === 'GET' && url.pathname.startsWith('/api/updates/download/')) {
-          const requested = decodeURIComponent(url.pathname.slice('/api/updates/download/'.length));
+          const requested = safeDecodeParam(url.pathname.slice('/api/updates/download/'.length));
           const safeName = basename(requested);
           if (!safeName || safeName !== requested || !/^[a-zA-Z0-9._-]+\.tar\.gz$/.test(safeName)) {
             return sendJson(400, { error: 'Nome de arquivo de atualização inválido.' });
@@ -335,7 +393,16 @@ export function createVpsServer({
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
           });
-          createReadStream(filePath).pipe(res);
+          const stream = createReadStream(filePath);
+          stream.on('error', err => {
+            console.error('[vps] Erro ao ler pacote de atualização:', err);
+            if (!res.headersSent) {
+              sendJson(500, { error: 'Erro interno do servidor.' });
+            } else {
+              res.destroy();
+            }
+          });
+          stream.pipe(res);
           return;
         }
 
@@ -351,16 +418,21 @@ export function createVpsServer({
 
           if (req.method === 'POST' && url.pathname === '/api/admin/allowlist') {
             const body = await readJsonBody(req, 16384);
-            const entry = db.addAllowedEmail(body.email, {
-              role: body.role === 'admin' ? 'admin' : 'user',
-              note: body.note ?? '',
-              addedBy: session.user.email,
-            });
+            let entry;
+            try {
+              entry = db.addAllowedEmail(body.email, {
+                role: body.role === 'admin' ? 'admin' : 'user',
+                note: body.note ?? '',
+                addedBy: session.user.email,
+              });
+            } catch (err) {
+              return sendJson(400, { error: err.message });
+            }
             return sendJson(200, { ok: true, entry, entries: db.listAllowedEmails() });
           }
 
           if (req.method === 'DELETE' && url.pathname.startsWith('/api/admin/allowlist/')) {
-            const targetEmail = normalizeEmail(decodeURIComponent(url.pathname.slice('/api/admin/allowlist/'.length)));
+            const targetEmail = normalizeEmail(safeDecodeParam(url.pathname.slice('/api/admin/allowlist/'.length)));
             if (targetEmail === session.user.email) {
               return sendJson(400, { error: 'Você não pode remover o próprio acesso de administrador.' });
             }
@@ -373,8 +445,12 @@ export function createVpsServer({
 
       return sendJson(404, { error: 'Rota não encontrada.' });
     } catch (err) {
+      const status = err.status ?? 500;
+      if (status >= 500) {
+        console.error('[vps] Erro interno na requisição:', err);
+      }
       if (!res.headersSent) {
-        sendJson(err.status ?? 500, { error: err.message || 'Erro interno do servidor.' });
+        sendJson(status, { error: status >= 500 ? 'Erro interno do servidor.' : (err.message || 'Requisição inválida.') });
       } else {
         res.end();
       }

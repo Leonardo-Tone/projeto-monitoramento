@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp,mkdir,writeFile,readFile,readdir,rm } from 'node:fs/promises';
-import {tmpdir}from'node:os';import{join}from'node:path';
+import {tmpdir}from'node:os';import{dirname,join,resolve}from'node:path';import{fileURLToPath}from'node:url';
 import{recoverAbandonedAmazonLock}from'../server/amazon-lock.mjs';
 import{createApplication}from'../server.mjs';
 import{spawn}from'node:child_process';import{once}from'node:events';
 import{startAmazon}from'../server/adapters.mjs';import{productInput}from'../server/model.mjs';
 import { processOwnerAlive } from '../server/process-owner.mjs';
 import { lockService } from '../server/storage.mjs';
+const projectRoot = process.env.MONITOR_PROJECT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('Windows recovers locks from before reboot while preserving same-boot locks when probing is denied',()=>fixture(async(data,path)=>{
   const denied=()=>{throw Object.assign(new Error('kill EPERM'),{code:'EPERM'});};
@@ -69,7 +70,7 @@ test('Amazon adapter recovers after an interrupted process and releases its lock
   const product=productInput({store:'amazon',name:'Produto de teste',url:'https://www.amazon.com.br/dp/B000GAYQJ0'});let reads=0;
   for(let attempt=0;attempt<2;attempt++){
     const controller=new AbortController();
-    await startAmazon({projectRoot:process.env.MONITOR_PROJECT_ROOT,dataDirectory:data,products:[product],signal:controller.signal,onResult:()=>{reads++;},onEvent:()=>{},onStatus:()=>{},onCycle:()=>controller.abort(),consultar:async()=>({totalInformado:1,totalLista:1,totalVisivel:1,cobertura:'PRIMEIRA_PAGINA_COMPLETA',ofertas:[{sellerId:'AMAZON',categoria:'AMAZON_DIRETA',vendedor:'Amazon.com.br',enviadoPor:'Amazon',precoNormalCentavos:8990,freteCentavos:0,minQty:1,maxQty:2}]})});
+    await startAmazon({projectRoot,dataDirectory:data,products:[product],signal:controller.signal,onResult:()=>{reads++;},onEvent:()=>{},onStatus:()=>{},onCycle:()=>controller.abort(),consultar:async()=>({totalInformado:1,totalLista:1,totalVisivel:1,cobertura:'PRIMEIRA_PAGINA_COMPLETA',ofertas:[{sellerId:'AMAZON',categoria:'AMAZON_DIRETA',vendedor:'Amazon.com.br',enviadoPor:'Amazon',precoNormalCentavos:8990,freteCentavos:0,minQty:1,maxQty:2}]})});
     await assert.rejects(readFile(path),{code:'ENOENT'});
   }
   assert.equal(reads,2);assert.equal((await readdir(join(data,'amazon'))).filter(name=>name.includes('abandoned')).length,1);

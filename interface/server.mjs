@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { loadRegistry, registryWriter, lockService } from './server/storage.mjs';
 import { productInput } from './server/model.mjs';
@@ -18,7 +18,31 @@ const projectRoot=resolve(process.env.MONITOR_PROJECT_ROOT??join(directory,'..')
 const defaultData=join(directory,'.data');
 const appVersion=JSON.parse(await readFile(join(directory,'package.json'),'utf8')).version;
 
-function applyRemoteUserData(service, remoteData) {
+const SYNC_PRODUCT_FIELDS = ['id', 'store', 'url', 'name', 'target', 'quantity', 'alert', 'auto', 'expectedSellerId'];
+const PRODUCT_ID_RE = /^[a-zA-Z0-9-]{1,64}$/;
+const LOCAL_STATE_TTL_MS = 5 * 60 * 1000;
+
+function pickSyncProduct(raw) {
+  const picked = {};
+  for (const key of SYNC_PRODUCT_FIELDS) {
+    if (raw && Object.hasOwn(raw, key) && raw[key] !== undefined) {
+      picked[key] = raw[key];
+    }
+  }
+  return picked;
+}
+
+function safeDecodeParam(raw) {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    const err = new Error('Parâmetro de URL inválido.');
+    err.status = 400;
+    throw err;
+  }
+}
+
+export function applyRemoteUserData(service, remoteData) {
   if (!remoteData?.exists) return false;
   if (Array.isArray(remoteData.products)) {
     const validatedProducts = [];
@@ -27,12 +51,15 @@ function applyRemoteUserData(service, remoteData) {
     const counts = { amazon: 0, ml: 0 };
     for (const raw of remoteData.products) {
       try {
-        const validated = productInput(raw, raw);
+        if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !PRODUCT_ID_RE.test(raw.id)) continue;
+        const picked = pickSyncProduct(raw);
+        const validated = productInput(picked, null);
+        if (validated.auto && validated.target === null) validated.auto = false;
         const key = `${validated.store}:${validated.code}`;
-        if (typeof raw.id !== 'string' || seenIds.has(raw.id) || seenKeys.has(key) || ++counts[validated.store] > 10) continue;
-        seenIds.add(raw.id);
+        if (seenIds.has(picked.id) || seenKeys.has(key) || ++counts[validated.store] > 10) continue;
+        seenIds.add(picked.id);
         seenKeys.add(key);
-        validatedProducts.push({ ...raw, ...validated, id: raw.id });
+        validatedProducts.push({ ...validated, id: picked.id });
       } catch {}
     }
     service.registry.products = validatedProducts;
@@ -44,8 +71,9 @@ function applyRemoteUserData(service, remoteData) {
   return true;
 }
 
-export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,updateTargetDirectory=directory,currentVersion,onRestart}={}) {
+export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,heartbeatIntervalMs=60_000,updateTargetDirectory=directory,currentVersion,onRestart}={}) {
   const unlock=await lockService(dataDirectory);
+  let heartbeatTimer=null;
   try {
     const registry=await loadRegistry(dataDirectory);
     const ids=new Set();const identities=new Set();const counts={amazon:0,ml:0};
@@ -56,15 +84,85 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
     }
     const save=registryWriter(dataDirectory);
     const service=new MonitoringService({registry,save,projectRoot:root,dataDirectory,adapters,loginOpener,notifier,purchaseRunner});
-    const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs});
+    const clearAccountLocalState=async()=>{
+      service.registry.products=[];
+      service.settings=defaults();
+      service.registry.settings=service.settings;
+      service.events=[];
+      service.registry.events=[];
+      service.registry.availabilityHistory=[];
+      service.registry.purchaseOrders=[];
+      service.registry.notificationOutbox=[];
+      service.registry.pendingProductEdits={};
+      delete service.registry.ownerUserId;
+      service.shops={amazon:{status:'stopped',message:'Pronto para monitorar'},ml:{status:'stopped',message:'Pronto para monitorar'}};
+      await save(service.registry);
+    };
+    const handleSessionRevoked=async()=>{
+      await service.stop();
+      await clearAccountLocalState();
+    };
+    const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs,onSessionRevoked:handleSessionRevoked});
     await authClient.init();
     const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart});
+    let lastAppliedRemoteUpdatedAt=null;
+    const syncToVps=async()=>{
+      if(!authClient.authenticated)return null;
+      const products=service.registry.products.map(pickSyncProduct);
+      const pushed=await authClient.pushUserData({products,settings:service.settings});
+      if(pushed?.updatedAt)lastAppliedRemoteUpdatedAt=pushed.updatedAt;
+      return pushed;
+    };
+    const ensureAccountOwner=async(userId)=>{
+      if(!userId)return;
+      if(service.registry.ownerUserId&&service.registry.ownerUserId!==userId){
+        await service.stop();
+        await clearAccountLocalState();
+      }
+      service.registry.ownerUserId=userId;
+    };
     if(authClient.authenticated&&!authClient.offlineMode){
       try {
+        await ensureAccountOwner(authClient.session?.user?.id);
+        if(authClient.pendingSync){
+          await syncToVps();
+        }
         const remote=await authClient.pullUserData();
-        if(applyRemoteUserData(service,remote))await save(service.registry);
+        if(remote?.exists){
+          if(applyRemoteUserData(service,remote)){
+            lastAppliedRemoteUpdatedAt=remote.updatedAt??null;
+            await save(service.registry);
+          }
+        } else {
+          await save(service.registry);
+        }
       } catch {}
       void updater.checkAndApply();
+    }
+    let heartbeatRunning=false;
+    if(authClient.enabled&&heartbeatIntervalMs>0){
+      heartbeatTimer=setInterval(async()=>{
+        if(heartbeatRunning||!authClient.authenticated)return;
+        heartbeatRunning=true;
+        try {
+          const hadPendingSync=authClient.pendingSync;
+          const user=await authClient.verifySession().catch(()=>null);
+          if(!user||authClient.offlineMode||!authClient.authenticated)return;
+          if(hadPendingSync||authClient.pendingSync){
+            await syncToVps();
+          }
+          const remote=await authClient.pullUserData().catch(()=>null);
+          if(remote?.exists&&remote.updatedAt!==lastAppliedRemoteUpdatedAt&&!service.state().running&&!service.purchases.state().busy){
+            if(applyRemoteUserData(service,remote)){
+              lastAppliedRemoteUpdatedAt=remote.updatedAt??null;
+              await save(service.registry);
+            }
+          }
+        } finally {
+          heartbeatRunning=false;
+        }
+      },heartbeatIntervalMs);
+      heartbeatTimer.unref?.();
     }
     try{
       const recovery=await recoverAbandonedAmazonLock(dataDirectory);
@@ -73,10 +171,39 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
     if(service.purchases.recoveredChanges)await save(registry);
     const token=randomBytes(32).toString('hex');
     let mutationQueue=Promise.resolve();
+    const pendingLocalStates=new Map();
+    const issueLocalState=()=>{
+      const now=Date.now();
+      for(const [k,exp]of pendingLocalStates)if(exp<now)pendingLocalStates.delete(k);
+      if(pendingLocalStates.size>=100){
+        const oldest=pendingLocalStates.keys().next().value;
+        if(oldest)pendingLocalStates.delete(oldest);
+      }
+      const value=randomBytes(24).toString('base64url');
+      pendingLocalStates.set(value,now+LOCAL_STATE_TTL_MS);
+      return value;
+    };
+    const consumeLocalState=received=>{
+      if(!received||typeof received!=='string')return false;
+      const now=Date.now();
+      for(const [k,exp]of pendingLocalStates)if(exp<now)pendingLocalStates.delete(k);
+      const recvBuf=Buffer.from(received,'utf8');
+      let matched=null;
+      for(const key of pendingLocalStates.keys()){
+        const keyBuf=Buffer.from(key,'utf8');
+        if(keyBuf.length===recvBuf.length&&timingSafeEqual(keyBuf,recvBuf))matched=key;
+      }
+      if(!matched)return false;
+      pendingLocalStates.delete(matched);
+      return true;
+    };
     const staticFiles=new Map([['/','index.html'],['/index.html','index.html'],['/styles.css','styles.css'],['/app.js','app.js'],['/cards.js','cards.js']]);
-    const syncToVps=async()=>{
-      if(!authClient.authenticated)return;
-      await authClient.pushUserData({products:service.registry.products,settings:service.settings});
+    const sanitizedState=()=>{
+      const base=service.state();
+      if(authClient.enabled&&!authClient.authenticated){
+        return {...base,products:[],events:[],purchases:{busy:false,orders:[]}};
+      }
+      return base;
     };
     const server=createServer(async(req,res)=>{
       const json=(status,body)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(body));};
@@ -90,16 +217,34 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
         if(!isOAuthCallback&&!isRootNavigation&&((req.headers.origin&&req.headers.origin!==origin)||req.headers['sec-fetch-site']==='cross-site'))return json(403,{error:'Origem não permitida.'});
         res.setHeader('X-Content-Type-Options','nosniff');
         res.setHeader('Referrer-Policy','no-referrer');
-        res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://http2.mlstatic.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+        res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://http2.mlstatic.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+        if(req.method==='GET'&&url.pathname==='/api/auth/start'){
+          if(!authClient.enabled)return json(400,{error:'Servidor VPS não configurado.'});
+          const localState=issueLocalState();
+          const callback=`${origin}/api/auth/callback?local_state=${encodeURIComponent(localState)}`;
+          const target=`${authClient.vpsUrl}/auth/google/start?callback=${encodeURIComponent(callback)}`;
+          res.writeHead(302,{Location:target,'Cache-Control':'no-store'});
+          res.end();
+          return;
+        }
         if(isOAuthCallback){
+          const receivedState=url.searchParams.get('local_state')??'';
+          if(!consumeLocalState(receivedState)){
+            return json(400,{error:'Estado de autenticação local inválido ou expirado.'});
+          }
           const code=url.searchParams.get('code')??'';
           if(!code)return json(400,{error:'Código de autenticação ausente.'});
           try {
-            await authClient.completeCallback(code);
+            const user=await authClient.completeCallback(code);
+            await ensureAccountOwner(user?.id);
             const remote=await authClient.pullUserData();
             if(remote?.exists){
-              if(applyRemoteUserData(service,remote))await save(service.registry);
+              if(applyRemoteUserData(service,remote)){
+                lastAppliedRemoteUpdatedAt=remote.updatedAt??null;
+                await save(service.registry);
+              }
             } else {
+              await save(service.registry);
               await syncToVps();
             }
             void updater.checkAndApply();
@@ -112,8 +257,11 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
             return;
           }
         }
-        if(req.method==='GET'&&url.pathname==='/api/state')return json(200,{...service.state(),auth:authClient.state(origin),update:updater.state(),token,apiVersion,appVersion});
-        if(req.method==='GET'&&url.pathname==='/api/availability-history')return json(200,{entries:service.registry.availabilityHistory.filter(row=>!url.searchParams.get('productId')||row.productId===url.searchParams.get('productId')).slice().reverse()});
+        if(req.method==='GET'&&url.pathname==='/api/state')return json(200,{...sanitizedState(),auth:authClient.state(origin),update:updater.state(),token,apiVersion,appVersion});
+        if(req.method==='GET'&&url.pathname==='/api/availability-history'){
+          if(authClient.enabled&&!authClient.authenticated)return json(401,{error:'Faça login com sua conta Google para continuar.'});
+          return json(200,{entries:service.registry.availabilityHistory.filter(row=>!url.searchParams.get('productId')||row.productId===url.searchParams.get('productId')).slice().reverse()});
+        }
         if(req.method==='GET'&&url.pathname==='/api/admin/allowlist'){
           if(!authClient.authenticated)return json(401,{error:'Faça login para continuar.'});
           try {return json(200,await authClient.adminListAllowlist());}catch(error){return json(error.status??400,{error:error.message});}
@@ -128,19 +276,21 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
         let input;try{input=JSON.parse(body||'{}');}catch{return json(400,{error:'Dados inválidos.'});}
         if(!input||typeof input!=='object'||Array.isArray(input))return json(400,{error:'Dados inválidos.'});
         if(req.method==='POST'&&url.pathname==='/api/auth/logout'){
+          await service.stop();
           await authClient.logout();
-          return json(200,{...service.state(),auth:authClient.state(origin),update:updater.state(),apiVersion});
+          await clearAccountLocalState();
+          return json(200,{...sanitizedState(),auth:authClient.state(origin),update:updater.state(),apiVersion});
         }
         if(authClient.enabled&&!authClient.authenticated)return json(401,{error:'Faça login com sua conta Google para continuar.'});
         if(req.method==='POST'&&url.pathname==='/api/auth/sync'){
           await syncToVps();
-          return json(200,{...service.state(),auth:authClient.state(origin),update:updater.state(),apiVersion});
+          return json(200,{...sanitizedState(),auth:authClient.state(origin),update:updater.state(),apiVersion});
         }
         if(req.method==='POST'&&url.pathname==='/api/admin/allowlist'){
           try {return json(200,await authClient.adminAddEmail(input));}catch(error){return json(error.status??400,{error:error.message});}
         }
         if(req.method==='DELETE'&&url.pathname.startsWith('/api/admin/allowlist/')){
-          const targetEmail=decodeURIComponent(url.pathname.slice('/api/admin/allowlist/'.length));
+          const targetEmail=safeDecodeParam(url.pathname.slice('/api/admin/allowlist/'.length));
           try {return json(200,await authClient.adminRemoveEmail(targetEmail));}catch(error){return json(error.status??400,{error:error.message});}
         }
         const operation=async()=>{
@@ -152,27 +302,40 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
             await service.importProducts(references);
             shouldSync=true;
           }
-          else if(req.method==='PATCH'&&/^\/api\/products\/[^/]+$/.test(url.pathname)){await service.edit(decodeURIComponent(url.pathname.split('/').at(-1)),input);shouldSync=true;}
-          else if(req.method==='DELETE'&&/^\/api\/products\/[^/]+$/.test(url.pathname)){await service.remove(decodeURIComponent(url.pathname.split('/').at(-1)));shouldSync=true;}
-          else if(req.method==='POST'&&url.pathname==='/api/monitor/start')service.start();
+          else if(req.method==='PATCH'&&/^\/api\/products\/[^/]+$/.test(url.pathname)){await service.edit(safeDecodeParam(url.pathname.split('/').at(-1)),input);shouldSync=true;}
+          else if(req.method==='DELETE'&&/^\/api\/products\/[^/]+$/.test(url.pathname)){await service.remove(safeDecodeParam(url.pathname.split('/').at(-1)));shouldSync=true;}
+          else if(req.method==='POST'&&url.pathname==='/api/monitor/start'){
+            if(authClient.enabled){
+              const verified=await authClient.verifySession().catch(err=>{
+                if(err.status===401)return null;
+                throw err;
+              });
+              if(!verified||!authClient.authenticated){
+                const e=new Error('Sessão revogada ou expirada. Faça login novamente.');
+                e.status=401;
+                throw e;
+              }
+            }
+            service.start();
+          }
           else if(req.method==='POST'&&url.pathname==='/api/monitor/stop')await service.stop();
           else if(req.method==='POST'&&url.pathname==='/api/notifications/test')await service.notify({id:randomBytes(16).toString('hex'),title:'Vigia · teste de notificação',message:'Os alertas de disponibilidade e Pix aparecem nas notificações do Windows.'});
-          else if(req.method==='POST'&&/^\/api\/purchases\/[^/]+\/resolve$/.test(url.pathname))await service.purchases.resolve(decodeURIComponent(url.pathname.split('/')[3]));
+          else if(req.method==='POST'&&/^\/api\/purchases\/[^/]+\/resolve$/.test(url.pathname))await service.purchases.resolve(safeDecodeParam(url.pathname.split('/')[3]));
           else if(req.method==='POST'&&/^\/api\/accounts\/(amazon|ml)\/(monitor|purchase)\/(open|close)$/.test(url.pathname)) {
             const [,,,store,purpose,operation]=url.pathname.split('/');
             if(operation==='open')await service.openLogin(store,purpose);else await service.closeLogin(store,purpose);
           }
           else {const e=new Error('Ação não encontrada.');e.status=404;throw e;}
           if(shouldSync)await syncToVps();
-          return {...service.state(),auth:authClient.state(origin),update:updater.state(),apiVersion};
+          return {...sanitizedState(),auth:authClient.state(origin),update:updater.state(),apiVersion};
         };
         const result=mutationQueue.then(operation);mutationQueue=result.catch(()=>{});
         try {return json(200,await result);}catch(error){return json(error.status??400,{error:error.message});}
-      } catch(error) {if(!res.headersSent)json(500,{error:'Não foi possível concluir a solicitação: '+error.message});else res.end();}
+      } catch(error) {if(!res.headersSent)json(error.status??500,{error:error.status?error.message:'Não foi possível concluir a solicitação: '+error.message});else res.end();}
     });
     server.requestTimeout=30000;
-    return {server,service,authClient,updater,async close(){await service.close();await mutationQueue;server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve));await unlock();}};
-  } catch(error){await unlock();throw error;}
+    return {server,service,authClient,updater,async close(){if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}await service.close();await mutationQueue;server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve));await unlock();}};
+  } catch(error){if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}await unlock();throw error;}
 }
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
@@ -190,7 +353,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).hr
     app=await createApplication({onRestart:restartSelf});
     const port=Number(process.env.VIGIA_PORT??4318);
     app.server.on('error',e=>{console.error('Não foi possível abrir o painel:',e.message);void app.close().finally(()=>{process.exitCode=1;});});
-    app.server.listen(port,'127.0.0.1',()=>console.log(`Vigia: http://127.0.0.1:${app.server.address().port}\nAbra INICIAR-PAINEL.cmd para usar a interface. Ctrl+C encerra o serviço e os monitores.`));
+    app.server.listen(port,'127.0.0.1',()=>console.log(`Vigia: http://127.0.0.1:${app.server.address().port}\nCtrl+C encerra o serviço e os monitores.`));
     let closing=false;
     const shutdown=()=>{if(closing)return;closing=true;void app.close().catch(e=>{console.error(e.message);process.exitCode=1;});};
     process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);

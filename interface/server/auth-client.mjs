@@ -30,13 +30,27 @@ export function loadLocalEnv(filePath) {
 const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class AuthClient {
-  constructor({ dataDirectory, vpsUrl = '', fetchImpl = fetch, now = () => Date.now(), offlineGraceMs = OFFLINE_GRACE_MS } = {}) {
+  constructor({ dataDirectory, vpsUrl = '', fetchImpl = fetch, now = () => Date.now(), offlineGraceMs = OFFLINE_GRACE_MS, onSessionRevoked = null } = {}) {
     this.dataDirectory = dataDirectory;
     this.sessionFile = join(dataDirectory, 'auth-session.json');
-    this.vpsUrl = String(vpsUrl ?? '').trim().replace(/\/+$/, '');
+    const normalizedVpsUrl = String(vpsUrl ?? '').trim().replace(/\/+$/, '');
+    if (normalizedVpsUrl) {
+      let parsed;
+      try {
+        parsed = new URL(normalizedVpsUrl);
+      } catch {
+        throw new Error('URL do servidor VPS inválida.');
+      }
+      const isLocalHttp = parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname);
+      if (parsed.protocol !== 'https:' && !isLocalHttp) {
+        throw new Error('A URL do servidor VPS deve usar HTTPS.');
+      }
+    }
+    this.vpsUrl = normalizedVpsUrl;
     this.fetchImpl = fetchImpl;
     this.now = now;
     this.offlineGraceMs = offlineGraceMs;
+    this.onSessionRevoked = onSessionRevoked;
     this.session = null;
     this.offlineMode = false;
     this.offlineExpired = false;
@@ -76,6 +90,7 @@ export class AuthClient {
       const raw = JSON.parse(await readFile(this.sessionFile, 'utf8'));
       if (raw?.sessionToken && raw?.user?.email) {
         this.session = raw;
+        this.pendingSync = Boolean(raw.pendingSync);
       }
     } catch (err) {
       if (err.code !== 'ENOENT') {
@@ -98,9 +113,7 @@ export class AuthClient {
       lastVerifiedAt: this.session?.lastVerifiedAt ?? null,
       pendingSync: this.pendingSync,
       user: this.authenticated ? (this.session?.user ?? null) : null,
-      loginUrl: this.enabled && localOrigin
-        ? `${this.vpsUrl}/auth/google/start?callback=${encodeURIComponent(`${localOrigin}/api/auth/callback`)}`
-        : null,
+      loginUrl: this.enabled ? '/api/auth/start' : null,
       syncStatus: this.syncStatus,
       lastSyncedAt: this.lastSyncedAt,
       lastSyncError: this.lastSyncError,
@@ -108,9 +121,11 @@ export class AuthClient {
   }
 
   async saveSession(session) {
-    this.session = session;
+    const persisted = { ...session, pendingSync: Boolean(session.pendingSync ?? this.pendingSync) };
+    this.session = persisted;
+    this.pendingSync = persisted.pendingSync;
     await mkdir(this.dataDirectory, { recursive: true });
-    await writeFile(this.sessionFile, JSON.stringify(session, null, 2), 'utf8');
+    await writeFile(this.sessionFile, JSON.stringify(persisted, null, 2), { encoding: 'utf8', mode: 0o600 });
   }
 
   async clearSession() {
@@ -123,6 +138,16 @@ export class AuthClient {
     await unlink(this.sessionFile).catch(err => {
       if (err.code !== 'ENOENT') throw err;
     });
+  }
+
+  async handleRevoked({ offlineExpired = false } = {}) {
+    await this.clearSession();
+    if (offlineExpired) {
+      this.offlineExpired = true;
+      this.syncStatus = 'error';
+      this.lastSyncError = 'Mais de 7 dias sem conexão com o servidor VPS. Conecte-se para renovar o acesso.';
+    }
+    await this.onSessionRevoked?.();
   }
 
   async request(path, { method = 'GET', body, auth = true } = {}) {
@@ -143,16 +168,18 @@ export class AuthClient {
         method,
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(10000),
       });
     } catch (networkErr) {
-      const err = new Error(`Servidor VPS inacessível: ${networkErr.message}`);
+      const timedOut = networkErr?.name === 'TimeoutError' || networkErr?.name === 'AbortError';
+      const err = new Error(timedOut ? 'Tempo limite ao conectar ao servidor VPS.' : `Servidor VPS inacessível: ${networkErr.message}`);
       err.networkError = true;
       throw err;
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       if (res.status === 401 && auth) {
-        await this.clearSession();
+        await this.handleRevoked();
       }
       const err = new Error(data.error || `Erro HTTP ${res.status} no servidor VPS.`);
       err.status = res.status;
@@ -176,6 +203,7 @@ export class AuthClient {
       expiresAt: data.expiresAt,
       user: data.user,
       lastVerifiedAt: nowIso,
+      pendingSync: false,
     });
     this.offlineMode = false;
     this.offlineExpired = false;
@@ -205,10 +233,7 @@ export class AuthClient {
           this.lastSyncError = 'VPS fora do ar · usando dados salvos localmente';
           return this.session.user;
         }
-        this.offlineMode = true;
-        this.offlineExpired = true;
-        this.syncStatus = 'error';
-        this.lastSyncError = 'Mais de 7 dias sem conexão com o servidor VPS. Conecte-se para renovar o acesso.';
+        await this.handleRevoked({ offlineExpired: true });
         return null;
       }
       throw err;
@@ -217,7 +242,12 @@ export class AuthClient {
 
   async logout() {
     if (this.session?.sessionToken) {
-      await this.request('/api/auth/logout', { method: 'POST' }).catch(() => {});
+      const token = this.session.sessionToken;
+      await this.fetchImpl(`${this.vpsUrl}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => {});
     }
     await this.clearSession();
   }
@@ -254,8 +284,8 @@ export class AuthClient {
         method: 'PUT',
         body: { products, settings },
       });
-      await this.saveSession({ ...this.session, lastVerifiedAt: new Date(this.now()).toISOString() });
       this.pendingSync = false;
+      await this.saveSession({ ...this.session, pendingSync: false, lastVerifiedAt: new Date(this.now()).toISOString() });
       this.syncStatus = 'synced';
       this.lastSyncedAt = data.updatedAt ?? new Date(this.now()).toISOString();
       return data;
@@ -263,6 +293,7 @@ export class AuthClient {
       if (err.networkError && this.isWithinOfflineGrace()) {
         this.offlineMode = true;
         this.pendingSync = true;
+        await this.saveSession({ ...this.session, pendingSync: true }).catch(() => {});
         this.syncStatus = 'offline';
         this.lastSyncError = 'Alterações salvas localmente (serão enviadas quando o VPS voltar)';
         return null;
@@ -280,10 +311,27 @@ export class AuthClient {
 
   async downloadUpdate(filename) {
     if (!this.authenticated) throw new Error('Sessão não autenticada.');
-    const res = await this.fetchImpl(`${this.vpsUrl}/api/updates/download/${encodeURIComponent(filename)}`, {
-      headers: { Authorization: `Bearer ${this.session.sessionToken}` },
-    });
-    if (!res.ok) throw new Error(`Falha ao baixar atualização (HTTP ${res.status}).`);
+    let res;
+    try {
+      res = await this.fetchImpl(`${this.vpsUrl}/api/updates/download/${encodeURIComponent(filename)}`, {
+        headers: { Authorization: `Bearer ${this.session.sessionToken}` },
+        signal: AbortSignal.timeout(60000),
+      });
+    } catch (networkErr) {
+      const timedOut = networkErr?.name === 'TimeoutError' || networkErr?.name === 'AbortError';
+      const err = new Error(timedOut ? 'Tempo limite ao baixar atualização do servidor VPS.' : `Falha de rede ao baixar atualização: ${networkErr.message}`);
+      err.networkError = true;
+      throw err;
+    }
+    if (!res.ok) {
+      if (res.status === 401) {
+        await this.handleRevoked();
+      }
+      const err = new Error(`Falha ao baixar atualização (HTTP ${res.status}).`);
+      err.status = res.status;
+      if (res.status >= 500) err.networkError = true;
+      throw err;
+    }
     return Buffer.from(await res.arrayBuffer());
   }
 

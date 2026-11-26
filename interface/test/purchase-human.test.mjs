@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createPurchaseHumanGate, purchasePageKind, revealPurchasePage, RevalidatePurchase } from '../server/purchase-human.mjs';
 import { runPurchase } from '../server/purchase-runner.mjs';
 import { defaults } from '../server/availability.mjs';
+const projectRoot = process.env.MONITOR_PROJECT_ROOT ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('purchase gate recognizes the actual ML CAPTCHA route, login and visible challenges while rejecting foreign origins',()=>{
   assert.equal(purchasePageKind('https://www.mercadolivre.com.br/captcha/wall/logged'),'WALL');
@@ -70,7 +73,7 @@ for(const timeout of [false,true])test(`runner switches the same purchase profil
   const events=[];let launches=0,closed=0,focused=0,validations=0,latestProduct;
   const itemUrl='https://www.mercadolivre.com.br/p/MLB123?pdp_filters=item_id:MLB456';
   await assert.rejects(()=>runPurchase({
-    order:{items:[{itemId:'MLB456',catalog:'MLB123',sellerId:'1',quantity:1,limitCents:100,url:itemUrl}]},settings:defaults(),projectRoot:process.env.MONITOR_PROJECT_ROOT,dataDirectory:'test',signal:new AbortController().signal,notify:async()=>{},
+    order:{items:[{itemId:'MLB456',catalog:'MLB123',sellerId:'1',quantity:1,limitCents:100,url:itemUrl}]},settings:defaults(),projectRoot,dataDirectory:'test',signal:new AbortController().signal,notify:async()=>{},
     htmlReader:async page=>page.content(),
     stage:async(status,message)=>{if(message==='Conferindo anúncios e carrinho no perfil de compra.'&&++validations===2)throw Error('STOP_AFTER_REVALIDATION');},
     launcher:async options=>{

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createVpsServer } from '../server.mjs';
+import { createVpsServer, isValidLocalCallback } from '../server.mjs';
+import { exchangeGoogleCode } from '../oauth.mjs';
 
 async function startTestVps(options = {}) {
   const app = createVpsServer({
@@ -158,7 +159,137 @@ test('rejects non-localhost callback URLs to prevent open redirects', async () =
       redirect: 'manual',
     });
     assert.equal(res.status, 400);
+    assert.match(res.headers.get('content-security-policy') ?? '', /default-src 'none'/);
   } finally {
     await app.close();
   }
 });
+
+test('isValidLocalCallback enforces strict port range, no credentials, no hash, and allows local_state query', () => {
+  assert.equal(isValidLocalCallback('http://127.0.0.1:4318/api/auth/callback'), true);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:4318/api/auth/callback?local_state=abc123'), true);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:1024/api/auth/callback'), true);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:65535/api/auth/callback'), true);
+  // Inválidos
+  assert.equal(isValidLocalCallback('http://127.0.0.1/api/auth/callback'), false);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:80/api/auth/callback'), false);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:1023/api/auth/callback'), false);
+  assert.equal(isValidLocalCallback('http://user:pass@127.0.0.1:4318/api/auth/callback'), false);
+  assert.equal(isValidLocalCallback('http://127.0.0.1:4318/api/auth/callback#frag'), false);
+  assert.equal(isValidLocalCallback('https://127.0.0.1:4318/api/auth/callback'), false);
+  assert.equal(isValidLocalCallback('http://localhost:4318/api/auth/callback'), false);
+});
+
+test('rate limiting returns 429 on /auth/* and /api/* when request threshold is exceeded', async () => {
+  const { app, baseUrl } = await startTestVps({
+    rateLimit: { authMax: 3, apiMax: 4, windowMs: 60_000 },
+  });
+  try {
+    for (let i = 0; i < 3; i++) {
+      const res = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, {
+        redirect: 'manual',
+        headers: { 'X-Forwarded-For': '203.0.113.10' },
+      });
+      assert.equal(res.status, 302);
+    }
+    const authLimited = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, {
+      redirect: 'manual',
+      headers: { 'X-Forwarded-For': '203.0.113.10' },
+    });
+    assert.equal(authLimited.status, 429);
+    assert.ok(Number(authLimited.headers.get('retry-after')) >= 1);
+
+    // Outro IP continua liberado
+    const otherIp = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, {
+      redirect: 'manual',
+      headers: { 'X-Forwarded-For': '203.0.113.11' },
+    });
+    assert.equal(otherIp.status, 302);
+
+    // Rate limit em /api/*
+    for (let i = 0; i < 4; i++) {
+      const res = await fetch(`${baseUrl}/api/me`, { headers: { 'X-Forwarded-For': '203.0.113.20' } });
+      assert.equal(res.status, 401);
+    }
+    const apiLimited = await fetch(`${baseUrl}/api/me`, { headers: { 'X-Forwarded-For': '203.0.113.20' } });
+    assert.equal(apiLimited.status, 429);
+  } finally {
+    await app.close();
+  }
+});
+
+test('handles malformed decodeURIComponent (400), rejects > 100 products (400), hides 502 OAuth internals, and sanitizes Google picture URL', async () => {
+  const { app, baseUrl } = await startTestVps({
+    oauthExchange: async ({ code }) => {
+      if (code === 'fail-google') throw new Error('RAW_SECRET_OAUTH_BODY_SHOULD_NOT_LEAK');
+      return {
+        googleSub: 'sub-admin-2',
+        email: 'admin@gmail.com',
+        name: 'Admin',
+        picture: 'https://lh3.googleusercontent.com/ok.png',
+      };
+    },
+  });
+  try {
+    // 502 genérico sem vazar erro interno do Google OAuth
+    const startFail = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, { redirect: 'manual' });
+    const stateFail = new URL(startFail.headers.get('location')).searchParams.get('state');
+    const cbFail = await fetch(`${baseUrl}/auth/google/callback?code=fail-google&state=${encodeURIComponent(stateFail)}`, { redirect: 'manual' });
+    assert.equal(cbFail.status, 502);
+    const cbFailBody = await cbFail.text();
+    assert.doesNotMatch(cbFailBody, /RAW_SECRET_OAUTH_BODY_SHOULD_NOT_LEAK/);
+
+    // Autentica como admin
+    const startOk = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, { redirect: 'manual' });
+    const stateOk = new URL(startOk.headers.get('location')).searchParams.get('state');
+    const cbOk = await fetch(`${baseUrl}/auth/google/callback?code=ok&state=${encodeURIComponent(stateOk)}`, { redirect: 'manual' });
+    const authCode = new URL(cbOk.headers.get('location')).searchParams.get('code');
+    const ex = await (await fetch(`${baseUrl}/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: authCode }),
+    })).json();
+    const authHeaders = { Authorization: `Bearer ${ex.sessionToken}`, 'Content-Type': 'application/json' };
+
+    // decodeURIComponent malformado retorna 400
+    const badDownload = await fetch(`${baseUrl}/api/updates/download/%E0%A4%A`, { headers: authHeaders });
+    assert.equal(badDownload.status, 400);
+    const badDelete = await fetch(`${baseUrl}/api/admin/allowlist/%E0%A4%A`, { method: 'DELETE', headers: authHeaders });
+    assert.equal(badDelete.status, 400);
+
+    // Mais de 100 produtos retorna 400
+    const tooManyProducts = Array.from({ length: 101 }, (_, i) => ({ id: `p${i}`, store: 'amazon' }));
+    const putTooMany = await fetch(`${baseUrl}/api/user/data`, {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ products: tooManyProducts, settings: {} }),
+    });
+    assert.equal(putTooMany.status, 400);
+
+    // Validação de picture em oauth.mjs
+    const badPicProfile = await exchangeGoogleCode({
+      code: 'c', codeVerifier: 'v', clientId: 'id', clientSecret: 'sec', redirectUri: 'https://x/cb',
+      fetchImpl: async url => ({
+        ok: true,
+        json: async () => url.includes('token')
+          ? { access_token: 'tok' }
+          : { sub: '123', email: 'a@gmail.com', email_verified: true, name: 'A', picture: 'https://evil.example/pic.png' },
+      }),
+    });
+    assert.equal(badPicProfile.picture, '');
+
+    const goodPicProfile = await exchangeGoogleCode({
+      code: 'c', codeVerifier: 'v', clientId: 'id', clientSecret: 'sec', redirectUri: 'https://x/cb',
+      fetchImpl: async url => ({
+        ok: true,
+        json: async () => url.includes('token')
+          ? { access_token: 'tok' }
+          : { sub: '123', email: 'a@gmail.com', email_verified: true, name: 'A', picture: 'https://lh3.googleusercontent.com/a/avatar=s96-c' },
+      }),
+    });
+    assert.equal(goodPicProfile.picture, 'https://lh3.googleusercontent.com/a/avatar=s96-c');
+  } finally {
+    await app.close();
+  }
+});
+
