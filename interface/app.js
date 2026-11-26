@@ -71,9 +71,10 @@ function applyState(next){
     if(!seenEvents.has(event.id)){
       seenEvents.add(event.id);
       const p=products.find(p=>p.id===event.productId);
-      if(eventsPrimed&&p?.alert&&['ALVO_ATINGIDO','AMAZON_DIRETA_AGORA_VISIVEL','DISPONIBILIDADE_CONFIRMADA'].includes(event.type))toast(`Alerta: ${displayName(p)} · ${event.type==='ALVO_ATINGIDO'?'preço limite atingido':'disponibilidade observada'}`);
+      if(eventsPrimed&&p?.alert&&(p.target!=null?event.type==='ALVO_ATINGIDO':['AMAZON_DIRETA_AGORA_VISIVEL','DISPONIBILIDADE_CONFIRMADA'].includes(event.type)))toast(`Alerta: ${displayName(p)} · ${event.type==='ALVO_ATINGIDO'?'preço limite atingido':'disponibilidade observada'}`);
     }
   }
+  if(next.appVersion&&$('app-version'))$('app-version').textContent=`Vigia · ${next.appVersion}`;
   eventsPrimed=true;
   render();updateMonitor();updateAccounts();renderPurchases();updateAuth();
 }
@@ -171,7 +172,7 @@ function updateMonitor(){
   $('monitor-title').textContent=serviceOutdated?'Serviço precisa ser reiniciado':!connected?'Serviço local desconectado':stopping?'Encerrando monitoramento':reconnecting?'Reconectando o monitoramento':starting?'Preparando os monitores':paused?'Monitoramento pausado durante a compra':monitoring?'Monitoramento em andamento':errors.length?'Monitoramento requer atenção':'Tudo pronto para começar';
   $('monitor-state').textContent=!connected?'Offline':stopping?'Parando':reconnecting?'Reconectando':starting?'Iniciando':paused?'Pausado':monitoring?'Ativo':errors.length?'Interrompido':'Parado';
   $('monitor-state').className='badge '+(monitoring?'available':errors.length?'unavailable':'neutral');
-  $('monitor-description').textContent=serviceOutdated?outdatedServiceMessage:!connected?'Abra INICIAR-PAINEL.cmd para conectar o serviço local.':'Amazon AOD v0.3 + ML persistente v3 · intervalo de 15 segundos';
+  $('monitor-description').textContent=serviceOutdated?outdatedServiceMessage:!connected?'Abra INICIAR-PAINEL.cmd para conectar o serviço local.':'Amazon e Mercado Livre · atualizações a cada 15 segundos';
   $('monitor-toggle').innerHTML=svg(monitoring?'stop':'play')+`<span>${monitoring?'Parar monitoramento':'Iniciar monitoramento'}</span>`;
   $('monitor-toggle').setAttribute('aria-pressed',String(monitoring));
   $('shop-status').innerHTML=['amazon','ml'].map(s=>`<div class="shop-status ${shops[s]?.status==='error'?'shop-error':''}"><strong>${storeNames[s]}</strong><span>${escapeHtml(shops[s]?.message??'Serviço não conectado.')}</span></div>`).join('');
@@ -479,6 +480,12 @@ function updateAuth() {
     } else {
       banner.hidden = true;
     }
+  }
+
+  const syncNote = $('storage-sync-note');
+  if (syncNote) {
+    const synced = Boolean(auth?.enabled && auth.authenticated && !auth.offlineMode);
+    syncNote.innerHTML = `<span class="status-dot"></span> ${synced ? 'Sincronizado automaticamente' : 'Salvo localmente'}`;
   }
 
   if (!auth || !auth.enabled) {

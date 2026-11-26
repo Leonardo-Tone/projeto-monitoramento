@@ -49,7 +49,7 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
   registerRecheck(product=>{recheckQueue.push(product);});
   // Interruptible waits preserve the core scheduler while making Stop responsive.
   const sleep=ms=>new Promise(resolve=>{if(signal.aborted)return resolve();const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve();};const timer=setTimeout(finish,ms);signal.addEventListener('abort',finish,{once:true});});
-  const runningMessage='Amazon AOD v0.3 consultas a cada 15 s';
+  const runningMessage='Monitoramento ativo · atualizações a cada 15 s';
   if(!consultar){
     onStatus('starting','Preparando o perfil Chrome de monitoramento Amazon…');
     transport=monitoringRecovery({store:'amazon',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,
@@ -202,7 +202,7 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
   let productPage,catalogPage;
   const networkByPage=new WeakMap();
   const parseMetadata=createMetadataParser(projectRoot);
-  const runningMessage='ML persistente v3 consultas a cada 15 s';
+  const runningMessage='Monitoramento ativo · atualizações a cada 15 s';
   const transport=monitoringRecovery({store:'ml',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,
     clearPages:()=>{productPage=null;catalogPage=null;}});
   // Fila de produtos que precisam de re-verificação instantânea.
@@ -270,7 +270,7 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
     }
   }
   try {
-    onStatus('starting','Preparando o navegador persistente do ML v3…');
+    onStatus('starting','Preparando monitoramento do Mercado Livre…');
     if(signal.aborted)return;
     await withMonitoringRead(()=>transport.start());
     if(signal.aborted)return;

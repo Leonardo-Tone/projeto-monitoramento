@@ -16,6 +16,7 @@ import { apiVersion } from './panel-api.mjs';
 const directory=dirname(fileURLToPath(import.meta.url));
 const projectRoot=resolve(process.env.MONITOR_PROJECT_ROOT??join(directory,'..'));
 const defaultData=join(directory,'.data');
+const appVersion=JSON.parse(await readFile(join(directory,'package.json'),'utf8')).version;
 
 function applyRemoteUserData(service, remoteData) {
   if (!remoteData?.exists) return false;
@@ -111,7 +112,7 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
             return;
           }
         }
-        if(req.method==='GET'&&url.pathname==='/api/state')return json(200,{...service.state(),auth:authClient.state(origin),update:updater.state(),token,apiVersion});
+        if(req.method==='GET'&&url.pathname==='/api/state')return json(200,{...service.state(),auth:authClient.state(origin),update:updater.state(),token,apiVersion,appVersion});
         if(req.method==='GET'&&url.pathname==='/api/availability-history')return json(200,{entries:service.registry.availabilityHistory.filter(row=>!url.searchParams.get('productId')||row.productId===url.searchParams.get('productId')).slice().reverse()});
         if(req.method==='GET'&&url.pathname==='/api/admin/allowlist'){
           if(!authClient.authenticated)return json(401,{error:'Faça login para continuar.'});

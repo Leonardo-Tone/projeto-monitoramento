@@ -33,7 +33,7 @@ export class MonitoringService {
 
     this.settings=validateSettings(registry.settings??defaults());registry.settings=this.settings;
 
-    this.shops={amazon:{status:'stopped',message:'Amazon AOD v0.3'},ml:{status:'stopped',message:'ML persistente v3'}};
+    this.shops={amazon:{status:'stopped',message:'Pronto para monitorar'},ml:{status:'stopped',message:'Pronto para monitorar'}};
 
     this.jobs=new Map();this.events=Array.isArray(registry.events)?registry.events.slice(-100):[];this.logins=new Map();this.loginTasks=new Map();this.storageError=null;
 
@@ -120,7 +120,7 @@ export class MonitoringService {
 
       if(updated.auto&&updated.target===null)updated.auto=false;
 
-      if(p.target!==updated.target||p.expectedSellerId!==updated.expectedSellerId){delete updated.mlConfirmation;delete p.mlConfirmation;}
+      if(p.target!==updated.target||p.expectedSellerId!==updated.expectedSellerId){delete updated.mlConfirmation;delete p.mlConfirmation;delete updated.availabilityNotification;delete p.availabilityNotification;}
 
       if(p.alert!==updated.alert){delete updated.mlConfirmation;delete p.mlConfirmation;delete updated.availabilityNotification;delete p.availabilityNotification;}
 
@@ -231,12 +231,21 @@ export class MonitoringService {
       else {
 
         const available=qualified.available===true&&qualified.eligible!==false;
+        const withinTarget=available&&product.target!==null&&qualified.price!==null&&qualified.price<=product.target;
+        const current={available,withinTarget};
+        const signature=JSON.stringify(current);
+        const prevConfirmed=typeof previous.confirmed==='boolean'?{available:previous.confirmed,withinTarget:false}:previous.confirmed;
 
-        previous.count=previous.pending===available?previous.count+1:1;previous.pending=available;
+        previous.count=previous.pending===signature?previous.count+1:1;previous.pending=signature;
 
-        if(previous.count>=2){if(available&&previous.confirmed!==true)this.publish({id:randomUUID(),productId:product.id,type:'DISPONIBILIDADE_CONFIRMADA',at:qualified.at??new Date().toISOString()});previous.confirmed=available;previous.count=2;}
+        if(previous.count>=2){
+          const at=qualified.at??new Date().toISOString();
+          if(current.available&&!prevConfirmed?.available)this.publish({id:randomUUID(),productId:product.id,type:'DISPONIBILIDADE_CONFIRMADA',at});
+          if(current.withinTarget&&!prevConfirmed?.withinTarget)this.publish({id:randomUUID(),productId:product.id,type:'ALVO_ATINGIDO',at});
+          previous.confirmed=current;previous.count=2;
+        }
 
-        else if(previous.count===1&&available){const handler=this.recheckHandlers.get(product.store);if(handler)handler(product);}
+        else if(previous.count===1&&current.available){const handler=this.recheckHandlers.get(product.store);if(handler)handler(product);}
 
       }
 
@@ -438,7 +447,8 @@ export class MonitoringService {
       this.registry.availabilityHistory.push(structuredClone({id:event.id,type:event.type,productId:product.id,at:event.at,product:Object.fromEntries(fields.map(key=>[key,product[key]??null])),filters:product.store==='amazon'?{onlyAmazon:this.settings.amazon.onlyAmazon}:{requireReputation:this.settings.ml.requireReputation,minReputation:this.settings.ml.minReputation,requireLeader:this.settings.ml.requireLeader,minLeader:this.settings.ml.minLeader,matchMode:this.settings.ml.matchMode}}));
     }
 
-    if(event.type==='DISPONIBILIDADE_CONFIRMADA'&&product?.alert)void this.notify({id:event.id,title:'Vigia · produto disponível',message:`${product.name||product.title||product.code} · ${product.store==='amazon'?'Amazon':'Mercado Livre'}${product.price!=null?' · R$ '+product.price.toFixed(2).replace('.',','):''}`}).catch(e=>{this.storageError=e.message;});
+    const shouldNotify=product?.alert&&(product.target!=null?event.type==='ALVO_ATINGIDO':event.type==='DISPONIBILIDADE_CONFIRMADA');
+    if(shouldNotify)void this.notify({id:event.id,title:product.target!=null?'Vigia · preço limite atingido':'Vigia · produto disponível',message:`${product.name||product.title||product.code} · ${product.store==='amazon'?'Amazon':'Mercado Livre'}${product.price!=null?' · R$ '+product.price.toFixed(2).replace('.',','):''}`}).catch(e=>{this.storageError=e.message;});
 
     this.save(this.registry).catch(e=>{this.storageError=e.message;void this.stop();});
 

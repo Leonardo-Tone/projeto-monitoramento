@@ -20,7 +20,7 @@ export function reputationMatches(level,medal,minimum) {
 }
 export function deliveryLabel(mode,type) {
   if(mode!=='me2')return 'Não informado';
-  return ({fulfillment:'Mercado Envios Full',cross_docking:'Mercado Envios Coleta',drop_off:'Mercado Envios · postagem',xd_drop_off:'Mercado Envios · agência',self_service:'Mercado Envios Flex'})[type]??'Mercado Envios (ME2)';
+  return ({fulfillment:'Mercado Envios Full',cross_docking:'Mercado Envios Coleta',drop_off:'Mercado Envios · postagem',xd_drop_off:'Mercado Envios · agência',self_service:'Mercado Envios Flex'})[type]??'Mercado Envios';
 }
 export function qualifyObservation(result,store,settings=defaults()) {
   if(result.error)return result;
