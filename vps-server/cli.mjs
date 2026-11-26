@@ -19,11 +19,12 @@ function sha256File(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
-function writeManifest({ version, filename, sha256, notes }) {
+function writeManifest({ version, filename, sha256, notes, format }) {
   mkdirSync(releasesDir, { recursive: true });
   const manifest = {
     version,
     filename,
+    format: format || (filename.endsWith('.exe') ? 'exe' : 'tar.gz'),
     sha256,
     notes: notes || '',
     publishedAt: new Date().toISOString(),
@@ -64,14 +65,18 @@ try {
     const version = arg1;
     const archivePath = arg2;
     const notes = rest.join(' ');
-    if (!version || !archivePath) throw new Error('Uso: node cli.mjs publish <versao> <caminho.tar.gz> [notas]');
+    if (!version || !archivePath) throw new Error('Uso: node cli.mjs publish <versao> <caminho.exe|caminho.tar.gz> [notas]');
     if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Versão inválida. Use o formato X.Y.Z (ex.: 0.12.0).');
+    const resolvedSrc = resolve(archivePath);
+    const isExe = resolvedSrc.toLowerCase().endsWith('.exe');
+    const isTarGz = resolvedSrc.toLowerCase().endsWith('.tar.gz');
+    if (!isExe && !isTarGz) throw new Error('Formato não suportado. Informe um instalador .exe ou pacote .tar.gz.');
     mkdirSync(releasesDir, { recursive: true });
-    const filename = `vigia-${version}.tar.gz`;
+    const filename = isExe ? `Vigia-Setup-${version}.exe` : `vigia-${version}.tar.gz`;
     const dest = join(releasesDir, filename);
-    copyFileSync(resolve(archivePath), dest);
+    copyFileSync(resolvedSrc, dest);
     const sha256 = sha256File(dest);
-    const manifest = writeManifest({ version, filename, sha256, notes });
+    const manifest = writeManifest({ version, filename, sha256, notes, format: isExe ? 'exe' : 'tar.gz' });
     console.log(`Atualização publicada: v${manifest.version} (${filename})`);
     console.log(`SHA-256: ${manifest.sha256}`);
   } else if (command === 'pack') {

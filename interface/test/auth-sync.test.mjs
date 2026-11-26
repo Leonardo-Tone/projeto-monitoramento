@@ -763,3 +763,115 @@ test('AutoUpdater blocks Tar Slip paths and symlinks before extraction; AuthClie
 });
 
 
+
+test('desktop mode encrypts sessionToken via tokenCodec, renders HTML callback, isolates monitor profile, and handles .exe updates with SHA-256', async () => {
+  const releasesDir = await mkdtemp(join(tmpdir(), 'vigia-exe-rel-'));
+  const dataDir = await mkdtemp(join(tmpdir(), 'vigia-exe-data-'));
+  const installerPayload = Buffer.from('MZ-FAKE-NSIS-INSTALLER-V0.12.0');
+  const installerName = 'Vigia-Setup-0.12.0.exe';
+  await writeFile(join(releasesDir, installerName), installerPayload);
+  const sha256 = createHash('sha256').update(installerPayload).digest('hex');
+  await writeFile(join(releasesDir, 'latest.json'), JSON.stringify({
+    version: '0.12.0',
+    filename: installerName,
+    format: 'exe',
+    sha256,
+    notes: 'Instalador Windows',
+    publishedAt: new Date().toISOString(),
+  }), 'utf8');
+
+  const vps = createVpsServer({
+    dbPath: ':memory:',
+    releasesDir,
+    publicBaseUrl: 'https://vigia-test.ts.net',
+    googleClientId: 'cid',
+    googleClientSecret: 'csec',
+    adminEmails: ['desk@gmail.com'],
+    oauthExchange: async () => ({
+      googleSub: 'sub-desk',
+      email: 'desk@gmail.com',
+      name: 'Desktop User',
+      picture: '',
+    }),
+  });
+  await new Promise(resolve => vps.server.listen(0, '127.0.0.1', resolve));
+  const vpsBaseUrl = `http://127.0.0.1:${vps.server.address().port}`;
+
+  const tokenCodec = {
+    encrypt: plain => Buffer.from('ENC:' + plain, 'utf8').toString('base64'),
+    decrypt: cipher => {
+      const text = Buffer.from(cipher, 'base64').toString('utf8');
+      assert.ok(text.startsWith('ENC:'));
+      return text.slice(4);
+    },
+  };
+
+  let authCompletedEmail = null;
+  let restartPayload = null;
+  let app1, app2;
+  const prevDesktopEnv = process.env.VIGIA_DESKTOP;
+  try {
+    process.env.VIGIA_DESKTOP = '1';
+    const { chromeProfile } = await import('../server/profiles.mjs');
+    const monProfile = chromeProfile('C:/unused-root', dataDir, 'ml', 'monitor');
+    assert.equal(monProfile.userDataDir, join(dataDir, 'chrome-profiles', 'monitor'));
+
+    app1 = await createApplication({
+      dataDirectory: dataDir,
+      vpsUrl: vpsBaseUrl,
+      currentVersion: '0.11.0',
+      heartbeatIntervalMs: 0,
+      desktopMode: true,
+      tokenCodec,
+      onAuthComplete: user => { authCompletedEmail = user?.email ?? null; },
+      onRestart: async payload => { restartPayload = payload; },
+    });
+    await new Promise(resolve => app1.server.listen(0, '127.0.0.1', resolve));
+    const localUrl = `http://127.0.0.1:${app1.server.address().port}`;
+
+    const startRes = await fetch(`${localUrl}/api/auth/start`, { redirect: 'manual' });
+    const vpsStartRes = await fetch(startRes.headers.get('location'), { redirect: 'manual' });
+    const googleState = new URL(vpsStartRes.headers.get('location')).searchParams.get('state');
+    const vpsCbRes = await fetch(`${vpsBaseUrl}/auth/google/callback?code=desk-1&state=${encodeURIComponent(googleState)}`, { redirect: 'manual' });
+    const localCbRes = await fetch(vpsCbRes.headers.get('location'), { redirect: 'manual' });
+    assert.equal(localCbRes.status, 200);
+    const html = await localCbRes.text();
+    assert.match(html, /Login concluído/i);
+    assert.equal(authCompletedEmail, 'desk@gmail.com');
+
+    const savedOnDisk = JSON.parse(await readFile(join(dataDir, 'auth-session.json'), 'utf8'));
+    assert.equal(savedOnDisk.sessionToken, undefined);
+    assert.ok(typeof savedOnDisk.encryptedSessionToken === 'string' && savedOnDisk.encryptedSessionToken.length > 0);
+
+    const applied = await app1.updater.checkAndApply();
+    if (process.platform === 'win32') {
+      assert.equal(applied, true);
+      assert.ok(restartPayload?.installerPath?.endsWith(installerName));
+      const downloaded = await readFile(restartPayload.installerPath);
+      assert.deepEqual(downloaded, installerPayload);
+      await rm(join(restartPayload.installerPath, '..'), { recursive: true, force: true }).catch(() => {});
+    }
+
+    await app1.close();
+    app1 = null;
+
+    app2 = await createApplication({
+      dataDirectory: dataDir,
+      vpsUrl: vpsBaseUrl,
+      currentVersion: '0.12.0',
+      heartbeatIntervalMs: 0,
+      desktopMode: true,
+      tokenCodec,
+    });
+    assert.equal(app2.authClient.authenticated, true);
+    assert.equal(app2.authClient.session.user.email, 'desk@gmail.com');
+  } finally {
+    if (prevDesktopEnv === undefined) delete process.env.VIGIA_DESKTOP;
+    else process.env.VIGIA_DESKTOP = prevDesktopEnv;
+    if (app1) await app1.close();
+    if (app2) await app2.close();
+    await vps.close();
+    await rm(releasesDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

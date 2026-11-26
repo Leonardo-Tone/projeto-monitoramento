@@ -1,0 +1,88 @@
+{
+  "name": "vigia-desktop",
+  "version": "0.11.0",
+  "private": true,
+  "type": "module",
+  "description": "Vigia — Monitor de preços e disponibilidade para Amazon e Mercado Livre",
+  "main": "main.mjs",
+  "scripts": {
+    "icons": "node scripts/generate-icons.mjs",
+    "start": "electron .",
+    "dist:win": "npm run icons && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "31.7.7",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.vigia.monitor",
+    "productName": "Vigia",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.mjs",
+      "assets/icon.png",
+      "assets/icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "../interface",
+        "to": "interface",
+        "filter": [
+          "**/*",
+          "!.data/**",
+          "!.runtime/**",
+          "!test/**",
+          "!backup-*/**",
+          "!.env",
+          "!.env.*"
+        ]
+      },
+      {
+        "from": "../Amazon/amazon-monitor-core",
+        "to": "Amazon/amazon-monitor-core",
+        "filter": [
+          "package.json",
+          "src/**/*",
+          "node_modules/**/*",
+          "!data/**"
+        ]
+      },
+      {
+        "from": "../Mercado_Livre",
+        "to": "Mercado_Livre",
+        "filter": [
+          "integracao-native.mjs",
+          "puppeteer-headless-runtime/package.json",
+          "puppeteer-headless-runtime/src/**/*",
+          "puppeteer-headless-runtime/scripts/**/*",
+          "puppeteer-headless-runtime/node_modules/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "Vigia-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vigia",
+      "runAfterFinish": true,
+      "installerLanguages": ["pt_BR"],
+      "language": "1046",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

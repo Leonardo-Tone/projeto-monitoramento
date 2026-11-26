@@ -30,7 +30,7 @@ export function loadLocalEnv(filePath) {
 const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export class AuthClient {
-  constructor({ dataDirectory, vpsUrl = '', fetchImpl = fetch, now = () => Date.now(), offlineGraceMs = OFFLINE_GRACE_MS, onSessionRevoked = null } = {}) {
+  constructor({ dataDirectory, vpsUrl = '', fetchImpl = fetch, now = () => Date.now(), offlineGraceMs = OFFLINE_GRACE_MS, onSessionRevoked = null, tokenCodec = null } = {}) {
     this.dataDirectory = dataDirectory;
     this.sessionFile = join(dataDirectory, 'auth-session.json');
     const normalizedVpsUrl = String(vpsUrl ?? '').trim().replace(/\/+$/, '');
@@ -51,6 +51,7 @@ export class AuthClient {
     this.now = now;
     this.offlineGraceMs = offlineGraceMs;
     this.onSessionRevoked = onSessionRevoked;
+    this.tokenCodec = tokenCodec;
     this.session = null;
     this.offlineMode = false;
     this.offlineExpired = false;
@@ -88,8 +89,17 @@ export class AuthClient {
     await mkdir(this.dataDirectory, { recursive: true });
     try {
       const raw = JSON.parse(await readFile(this.sessionFile, 'utf8'));
-      if (raw?.sessionToken && raw?.user?.email) {
-        this.session = raw;
+      let sessionToken = raw?.sessionToken ?? null;
+      if (!sessionToken && raw?.encryptedSessionToken && typeof this.tokenCodec?.decrypt === 'function') {
+        try {
+          sessionToken = this.tokenCodec.decrypt(raw.encryptedSessionToken);
+        } catch {
+          sessionToken = null;
+        }
+      }
+      if (sessionToken && raw?.user?.email) {
+        this.session = { ...raw, sessionToken };
+        delete this.session.encryptedSessionToken;
         this.pendingSync = Boolean(raw.pendingSync);
       }
     } catch (err) {
@@ -120,11 +130,17 @@ export class AuthClient {
   }
 
   async saveSession(session) {
-    const persisted = { ...session, pendingSync: Boolean(session.pendingSync ?? this.pendingSync) };
-    this.session = persisted;
-    this.pendingSync = persisted.pendingSync;
+    const inMemory = { ...session, pendingSync: Boolean(session.pendingSync ?? this.pendingSync) };
+    delete inMemory.encryptedSessionToken;
+    this.session = inMemory;
+    this.pendingSync = inMemory.pendingSync;
     await mkdir(this.dataDirectory, { recursive: true });
-    await writeFile(this.sessionFile, JSON.stringify(persisted, null, 2), { encoding: 'utf8', mode: 0o600 });
+    let toWrite = inMemory;
+    if (inMemory.sessionToken && typeof this.tokenCodec?.encrypt === 'function') {
+      const { sessionToken, ...rest } = inMemory;
+      toWrite = { ...rest, encryptedSessionToken: this.tokenCodec.encrypt(sessionToken) };
+    }
+    await writeFile(this.sessionFile, JSON.stringify(toWrite, null, 2), { encoding: 'utf8', mode: 0o600 });
   }
 
   async clearSession() {

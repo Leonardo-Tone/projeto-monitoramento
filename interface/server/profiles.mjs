@@ -8,10 +8,13 @@ export const accountKeys=['amazon/monitor','amazon/purchase','ml/monitor','ml/pu
 export function chromeProfile(projectRoot,dataDirectory,store,purpose) {
   const key=`${store}/${purpose}`;
   if(!accountKeys.includes(key))throw new Error('Conta ou finalidade inválida.');
-  // Both stores share one profile per purpose. Preserve the existing ML v3 monitor login.
-  const userDataDir=purpose==='monitor'
-    ?join(projectRoot,'Mercado_Livre','perfis','ml-chrome-headless-v3')
-    :join(dataDirectory,'chrome-profiles','purchase');
+  // Both stores share one profile per purpose. In Desktop mode store both under userData;
+  // in dev mode preserve the existing ML v3 monitor login path.
+  const userDataDir=process.env.VIGIA_DESKTOP==='1'
+    ?join(dataDirectory,'chrome-profiles',purpose)
+    :purpose==='monitor'
+      ?join(projectRoot,'Mercado_Livre','perfis','ml-chrome-headless-v3')
+      :join(dataDirectory,'chrome-profiles','purchase');
   return {key,userDataDir,profileDirectory:'Default',label:purpose==='monitor'?'Monitoramento · Amazon e Mercado Livre':'Compra · Amazon e Mercado Livre'};
 }
 export async function launchDedicatedProfile({projectRoot,dataDirectory,store,purpose,headless,integracaoLoader=null,puppeteerLoader=null}) {

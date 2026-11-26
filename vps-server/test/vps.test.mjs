@@ -293,3 +293,35 @@ test('handles malformed decodeURIComponent (400), rejects > 100 products (400), 
   }
 });
 
+
+test('serves authenticated .exe update packages with application/octet-stream', async () => {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const relDir = await mkdtemp(join(tmpdir(), 'vigia-vps-exe-'));
+  const exeName = 'Vigia-Setup-0.12.0.exe';
+  const exeBytes = Buffer.from('MZ-TEST-EXE-PAYLOAD');
+  await writeFile(join(relDir, exeName), exeBytes);
+  const { app, baseUrl } = await startTestVps({
+    releasesDir: relDir,
+    oauthExchange: async () => ({ googleSub: 'sub-exe', email: 'admin@gmail.com', name: 'Admin', picture: '' }),
+  });
+  try {
+    const s1 = await fetch(`${baseUrl}/auth/google/start?callback=${encodeURIComponent('http://127.0.0.1:4318/api/auth/callback')}`, { redirect: 'manual' });
+    const st1 = new URL(s1.headers.get('location')).searchParams.get('state');
+    const c1 = await fetch(`${baseUrl}/auth/google/callback?code=ok&state=${encodeURIComponent(st1)}`, { redirect: 'manual' });
+    const ac1 = new URL(c1.headers.get('location')).searchParams.get('code');
+    const ex1 = await (await fetch(`${baseUrl}/api/auth/exchange`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: ac1 }),
+    })).json();
+    const dlRes = await fetch(`${baseUrl}/api/updates/download/${exeName}`, {
+      headers: { Authorization: `Bearer ${ex1.sessionToken}` },
+    });
+    assert.equal(dlRes.status, 200);
+    assert.equal(dlRes.headers.get('content-type'), 'application/octet-stream');
+    assert.deepEqual(Buffer.from(await dlRes.arrayBuffer()), exeBytes);
+  } finally {
+    await app.close();
+    await rm(relDir, { recursive: true, force: true });
+  }
+});

@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,11 +41,13 @@ export function validateTarListing(stdout) {
 }
 
 export class AutoUpdater {
-  constructor({ authClient, targetDirectory, currentVersion, onRestart = null } = {}) {
+  constructor({ authClient, targetDirectory, currentVersion, onRestart = null, desktopMode = process.env.VIGIA_DESKTOP === '1', platform = process.platform } = {}) {
     this.authClient = authClient;
     this.targetDirectory = targetDirectory;
     this.currentVersion = currentVersion ?? null;
     this.onRestart = onRestart;
+    this.desktopMode = Boolean(desktopMode);
+    this.platform = platform;
     this.status = 'idle'; // idle | checking | downloading | installing | restarting | up_to_date | error
     this.availableVersion = null;
     this.notes = '';
@@ -96,22 +98,50 @@ export class AutoUpdater {
         return false;
       }
 
+      const safeFilename = basename(String(manifest.filename ?? ''));
+      const isExe = safeFilename.endsWith('.exe');
+      const isTarGz = safeFilename.endsWith('.tar.gz');
+      if (!safeFilename || safeFilename !== manifest.filename || (!isExe && !isTarGz)) {
+        this.status = 'error';
+        this.error = 'Nome de pacote de atualização inválido.';
+        return false;
+      }
+      if (this.desktopMode && (!isExe || this.platform !== 'win32')) {
+        this.status = 'up_to_date';
+        return false;
+      }
+      if (!this.desktopMode && !isTarGz) {
+        this.status = 'up_to_date';
+        return false;
+      }
+
       this.availableVersion = manifest.version;
       this.notes = manifest.notes || '';
       this.status = 'downloading';
 
       const tempDir = await mkdtemp(join(tmpdir(), 'vigia-update-'));
+      let keepTempForInstaller = false;
       try {
-        const buffer = await this.authClient.downloadUpdate(manifest.filename);
+        const buffer = await this.authClient.downloadUpdate(safeFilename);
         const actualHash = createHash('sha256').update(buffer).digest('hex');
         if (actualHash !== String(manifest.sha256).toLowerCase()) {
           throw new Error('Verificação SHA-256 falhou. Atualização abortada por segurança.');
         }
 
-        const archivePath = join(tempDir, manifest.filename);
+        const archivePath = join(tempDir, safeFilename);
         await writeFile(archivePath, buffer);
 
         this.status = 'installing';
+        if (isExe) {
+          keepTempForInstaller = true;
+          this.currentVersion = manifest.version;
+          this.status = 'restarting';
+          if (typeof this.onRestart === 'function') {
+            await this.onRestart({ ...manifest, installerPath: archivePath });
+          }
+          return true;
+        }
+
         const { stdout: listing } = await execFileAsync('tar', ['-tvzf', archivePath], { timeout: 30000 });
         validateTarListing(listing);
 
@@ -134,7 +164,9 @@ export class AutoUpdater {
         this.error = err.message;
         return false;
       } finally {
-        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        if (!keepTempForInstaller) {
+          await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        }
       }
     })();
 

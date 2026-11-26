@@ -71,7 +71,7 @@ export function applyRemoteUserData(service, remoteData) {
   return true;
 }
 
-export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,heartbeatIntervalMs=60_000,updateTargetDirectory=directory,currentVersion,onRestart}={}) {
+export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,heartbeatIntervalMs=60_000,updateTargetDirectory=directory,currentVersion,onRestart,tokenCodec=null,onAuthComplete=null,desktopMode=process.env.VIGIA_DESKTOP==='1'}={}) {
   const unlock=await lockService(dataDirectory);
   let heartbeatTimer=null;
   try {
@@ -102,9 +102,9 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
       await service.stop();
       await clearAccountLocalState();
     };
-    const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs,onSessionRevoked:handleSessionRevoked});
+    const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs,onSessionRevoked:handleSessionRevoked,tokenCodec});
     await authClient.init();
-    const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart});
+    const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart,desktopMode});
     let lastAppliedRemoteUpdatedAt=null;
     const syncToVps=async()=>{
       if(!authClient.authenticated)return null;
@@ -248,6 +248,12 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
               await syncToVps();
             }
             void updater.checkAndApply();
+            if(typeof onAuthComplete==='function'){try{onAuthComplete(user);}catch{}}
+            if(desktopMode){
+              res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"});
+              res.end('<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Vigia · Login concluído</title><style>body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#f4f3ef;color:#1d1c1a;display:grid;place-items:center;min-height:100vh;padding:24px}.card{background:#fff;border:1px solid #e2dfd7;border-radius:14px;max-width:420px;width:100%;padding:28px;box-shadow:0 10px 30px rgba(0,0,0,.06)}.badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#1f7a4c18;color:#1f7a4c;margin-bottom:12px}h1{margin:0 0 10px;font-size:20px}p{margin:0;line-height:1.5;color:#52504a;font-size:14px}</style></head><body><main class="card"><span class="badge">Vigia · Autenticação</span><h1>Login concluído!</h1><p>Sua conta Google foi conectada com sucesso. Você já pode fechar esta aba e voltar ao aplicativo Vigia.</p></main></body></html>');
+              return;
+            }
             res.writeHead(302,{Location:'/', 'Cache-Control':'no-store'});
             res.end();
             return;

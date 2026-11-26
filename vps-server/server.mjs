@@ -131,7 +131,7 @@ export function createVpsServer({
     if (!isAuthPath && !isApiPath) return { allowed: true };
     const bucketGroup = isAuthPath ? 'auth' : 'api';
     const max = isAuthPath ? rateLimitAuthMax : rateLimitApiMax;
-    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',').map(s => s.trim()).filter(Boolean).at(-1) ?? '';
     const ip = forwarded || req.socket?.remoteAddress || 'unknown';
     const key = `${bucketGroup}:${ip}`;
     const now = Date.now();
@@ -376,7 +376,7 @@ export function createVpsServer({
         if (req.method === 'GET' && url.pathname.startsWith('/api/updates/download/')) {
           const requested = safeDecodeParam(url.pathname.slice('/api/updates/download/'.length));
           const safeName = basename(requested);
-          if (!safeName || safeName !== requested || !/^[a-zA-Z0-9._-]+\.tar\.gz$/.test(safeName)) {
+          if (!safeName || safeName !== requested || !/^[a-zA-Z0-9._-]+\.(?:tar\.gz|exe)$/.test(safeName)) {
             return sendJson(400, { error: 'Nome de arquivo de atualização inválido.' });
           }
           const filePath = join(releasesDir, safeName);
@@ -388,7 +388,7 @@ export function createVpsServer({
             throw err;
           }
           res.writeHead(200, {
-            'Content-Type': 'application/gzip',
+            'Content-Type': safeName.endsWith('.exe') ? 'application/octet-stream' : 'application/gzip',
             'Content-Length': String(fileStat.size),
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
