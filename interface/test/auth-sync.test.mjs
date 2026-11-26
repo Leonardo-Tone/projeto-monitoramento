@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { gzipSync } from 'node:zlib';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -603,9 +604,11 @@ test('offline edits persist pendingSync (0o600) and push to VPS before pulling o
     await completeOAuthLogin(localUrl, vpsBaseUrl, 'sync-1');
     const st = await (await fetch(`${localUrl}/api/state`)).json();
 
-    // Verifica permissão 0o600 do arquivo auth-session.json
-    const sessionStat = await stat(join(dataDir, 'auth-session.json'));
-    assert.equal(sessionStat.mode & 0o777, 0o600);
+    // Verifica permissão 0o600 do arquivo auth-session.json (POSIX)
+    if (process.platform !== 'win32') {
+      const sessionStat = await stat(join(dataDir, 'auth-session.json'));
+      assert.equal(sessionStat.mode & 0o777, 0o600);
+    }
 
     // VPS cai -> usuário adiciona produto offline -> pendingSync = true persistido em disco
     vpsReachable = false;
@@ -640,11 +643,36 @@ test('offline edits persist pendingSync (0o600) and push to VPS before pulling o
   }
 });
 
+function createTarGzWithEntry(entryName, content = 'evil') {
+  const data = Buffer.from(content, 'utf8');
+  const header = Buffer.alloc(512, 0);
+  header.write(entryName, 0, Math.min(100, Buffer.byteLength(entryName)), 'utf8');
+  header.write('0000644\0', 100, 8, 'ascii');
+  header.write('0000000\0', 108, 8, 'ascii');
+  header.write('0000000\0', 116, 8, 'ascii');
+  header.write(data.length.toString(8).padStart(11, '0') + '\0', 124, 12, 'ascii');
+  header.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + '\0', 136, 12, 'ascii');
+  header.fill(0x20, 148, 156);
+  header.write('0', 156, 1, 'ascii');
+  header.write('ustar\0', 257, 6, 'ascii');
+  header.write('00', 263, 2, 'ascii');
+  let checksum = 0;
+  for (let i = 0; i < 512; i++) checksum += header[i];
+  header.write(checksum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii');
+  const paddedSize = Math.ceil(data.length / 512) * 512;
+  const body = Buffer.alloc(paddedSize, 0);
+  data.copy(body);
+  const trailer = Buffer.alloc(1024, 0);
+  return gzipSync(Buffer.concat([header, body, trailer]));
+}
+
 test('AutoUpdater blocks Tar Slip paths and symlinks before extraction; AuthClient enforces HTTPS', async () => {
   // Validação unitária de Tar Slip, caminhos absolutos e symlinks/hardlinks
   assert.throws(() => validateTarListing('lrwxrwxrwx user/group 0 2026-11-26 08:00 evil -> /etc/passwd'), /links simbólicos/);
   assert.throws(() => validateTarListing('hrw-r--r-- user/group 0 2026-11-26 08:00 hard link to target'), /links simbólicos/);
   assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 ../../escape.txt'), /Tar Slip/);
+  assert.throws(() => validateTarListing('-rw-r--r--  0 0      0           6 Nov 26 17:09 ../escape.txt'), /Tar Slip/);
+  assert.throws(() => validateTarListing('-rw-r--r--  0 0      0           6 26 nov 17:09 ../escape.txt'), /Tar Slip/);
   assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 /etc/passwd'), /caminho absoluto/);
   assert.throws(() => validateTarListing('-rw-r--r-- user/group 10 2026-11-26 08:00 C:\\Windows\\win.ini'), /caminho absoluto/);
 
@@ -653,17 +681,32 @@ test('AutoUpdater blocks Tar Slip paths and symlinks before extraction; AuthClie
   assert.doesNotThrow(() => new AuthClient({ dataDirectory: tmpdir(), vpsUrl: 'https://vigia.example.com' }));
   assert.doesNotThrow(() => new AuthClient({ dataDirectory: tmpdir(), vpsUrl: 'http://127.0.0.1:4400' }));
 
-  // Teste real com arquivo tar.gz contendo symlink via AutoUpdater
+  // Teste real com arquivo tar.gz malicioso via AutoUpdater (symlink em POSIX; fallback Tar Slip ../escape.txt no Windows sem privilégio)
   const releasesDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-rel-'));
   const pkgSrcDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-src-'));
   const targetDir = await mkdtemp(join(tmpdir(), 'vigia-tarslip-tgt-'));
   const dataDir = join(targetDir, '.data');
   await mkdir(dataDir, { recursive: true });
   await writeFile(join(targetDir, 'package.json'), JSON.stringify({ version: '0.11.0' }), 'utf8');
-  await symlink('/etc/hosts', join(pkgSrcDir, 'evil-link'));
   const archiveName = 'vigia-0.13.0.tar.gz';
   const archivePath = join(releasesDir, archiveName);
-  execFileSync('tar', ['-czf', archivePath, '-C', pkgSrcDir, '.']);
+
+  // Também garante que o gerador em memória produz um .tar.gz Tar Slip válido para tar -tvzf em qualquer SO
+  const tarSlipProbePath = join(releasesDir, 'probe-tarslip.tar.gz');
+  await writeFile(tarSlipProbePath, createTarGzWithEntry('../escape.txt', 'escape'));
+  const probeListing = execFileSync('tar', ['-tvzf', tarSlipProbePath], { encoding: 'utf8' });
+  assert.throws(() => validateTarListing(probeListing), /Tar Slip/);
+
+  try {
+    await symlink('/etc/hosts', join(pkgSrcDir, 'evil-link'));
+    execFileSync('tar', ['-czf', archivePath, '-C', pkgSrcDir, '.']);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      await writeFile(archivePath, createTarGzWithEntry('../escape.txt', 'escape'));
+    } else {
+      throw err;
+    }
+  }
   const sha256 = createHash('sha256').update(await readFile(archivePath)).digest('hex');
   await writeFile(join(releasesDir, 'latest.json'), JSON.stringify({
     version: '0.13.0',

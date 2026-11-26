@@ -11,18 +11,19 @@
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="#" aria-label="Vigia, início"><span class="brand-mark" data-icon="radar"></span>vigia<span class="brand-dot">.</span></a>
+    <a class="brand" id="brand-home" href="#" aria-label="Vigia, início"><span class="brand-mark" data-icon="radar"></span>vigia<span class="brand-dot">.</span></a>
     
     <span class="nav-label">Painel</span>
     <nav aria-label="Navegação principal">
       <button class="nav-item active" id="nav-products"><span data-icon="grid"></span>Produtos <span class="nav-count" id="nav-count">0</span></button>
       <button class="nav-item" id="nav-settings"><span data-icon="settings"></span>Configurações</button>
+      <button class="nav-item" id="nav-admin" hidden><span data-icon="shield"></span>Administração</button>
     </nav>
     <div class="sidebar-bottom"><div class="sidebar-footer"><span class="status-dot" id="sidebar-status-dot"></span> Vigia Desktop <span>PT-BR</span></div></div>
   </aside>
   <div class="page-shell">
     <header class="topbar">
-      <div class="breadcrumb">Meu espaço <span>/</span> <strong>Produtos</strong></div>
+      <div class="breadcrumb">Meu espaço <span>/</span> <strong id="breadcrumb-current">Produtos</strong></div>
       <div class="topbar-right">
         <span class="demo-pill" id="connection-pill"><span class="status-dot"></span> Desconectado</span>
         <div id="auth-user-pill" class="auth-user-pill" hidden>
@@ -38,53 +39,108 @@
       </div>
     </header>
     <main>
-      <div class="page-heading"><div><h1>Monitor de produtos</h1><p>Preços e disponibilidade na Amazon e no Mercado Livre</p></div><button class="button primary" id="add-top"><span data-icon="plus"></span>Adicionar produto</button></div>
-      <section class="monitor-console" aria-label="Monitoramento">
-        <div class="radar-display" aria-hidden="true"><span></span></div>
-        <section class="monitor-bar" aria-label="Controle de monitoramento"><div class="monitor-copy"><div><strong id="monitor-title">Tudo pronto para começar</strong><span class="badge neutral" id="monitor-state">Parado</span></div><p id="monitor-description">Defina suas regras e inicie o monitoramento das lojas.</p></div><button class="button dark" id="monitor-toggle"><span data-icon="play"></span><span>Iniciar monitoramento</span></button></section>
-        <div id="shop-status" class="shop-statuses" aria-live="polite"></div>
-        <section class="stats" aria-label="Resumo dos produtos">
-          <section class="stats-store" aria-labelledby="stats-amazon-title">
-            <h2 id="stats-amazon-title">Amazon</h2>
-            <dl class="stats-grid">
-              <div class="stat"><dt>Produtos no radar</dt><dd><strong id="stat-amazon-total">00</strong><small> / 10</small></dd></div>
-              <div class="stat stat-available"><dt>Disponíveis</dt><dd><strong id="stat-amazon-available">00</strong></dd></div>
-              <div class="stat"><dt>Alertas de disponibilidade</dt><dd><strong id="stat-amazon-alerts">00</strong></dd></div>
-              <div class="stat"><dt>Compra automática</dt><dd><strong id="stat-amazon-auto">00</strong></dd></div>
-            </dl>
-          </section>
-          <section class="stats-store" aria-labelledby="stats-ml-title">
-            <h2 id="stats-ml-title">Mercado Livre</h2>
-            <dl class="stats-grid">
-              <div class="stat"><dt>Produtos no radar</dt><dd><strong id="stat-ml-total">00</strong><small> / 10</small></dd></div>
-              <div class="stat stat-available"><dt>Disponíveis</dt><dd><strong id="stat-ml-available">00</strong></dd></div>
-              <div class="stat"><dt>Alertas de disponibilidade</dt><dd><strong id="stat-ml-alerts">00</strong></dd></div>
-              <div class="stat"><dt>Compra automática</dt><dd><strong id="stat-ml-auto">00</strong></dd></div>
-            </dl>
+      <div id="products-view">
+        <div class="page-heading"><div><h1>Monitor de produtos</h1><p>Preços e disponibilidade na Amazon e no Mercado Livre</p></div><button class="button primary" id="add-top"><span data-icon="plus"></span>Adicionar produto</button></div>
+        <section class="monitor-console" aria-label="Monitoramento">
+          <div class="radar-display" aria-hidden="true"><span></span></div>
+          <section class="monitor-bar" aria-label="Controle de monitoramento"><div class="monitor-copy"><div><strong id="monitor-title">Tudo pronto para começar</strong><span class="badge neutral" id="monitor-state">Parado</span></div><p id="monitor-description">Defina suas regras e inicie o monitoramento das lojas.</p></div><button class="button dark" id="monitor-toggle"><span data-icon="play"></span><span>Iniciar monitoramento</span></button></section>
+          <div id="shop-status" class="shop-statuses" aria-live="polite"></div>
+          <section class="stats" aria-label="Resumo dos produtos">
+            <section class="stats-store" aria-labelledby="stats-amazon-title">
+              <h2 id="stats-amazon-title">Amazon</h2>
+              <dl class="stats-grid">
+                <div class="stat"><dt>Produtos no radar</dt><dd><strong id="stat-amazon-total">00</strong><small> / 10</small></dd></div>
+                <div class="stat stat-available"><dt>Disponíveis</dt><dd><strong id="stat-amazon-available">00</strong></dd></div>
+                <div class="stat"><dt>Alertas de disponibilidade</dt><dd><strong id="stat-amazon-alerts">00</strong></dd></div>
+                <div class="stat"><dt>Compra automática</dt><dd><strong id="stat-amazon-auto">00</strong></dd></div>
+              </dl>
+            </section>
+            <section class="stats-store" aria-labelledby="stats-ml-title">
+              <h2 id="stats-ml-title">Mercado Livre</h2>
+              <dl class="stats-grid">
+                <div class="stat"><dt>Produtos no radar</dt><dd><strong id="stat-ml-total">00</strong><small> / 10</small></dd></div>
+                <div class="stat stat-available"><dt>Disponíveis</dt><dd><strong id="stat-ml-available">00</strong></dd></div>
+                <div class="stat"><dt>Alertas de disponibilidade</dt><dd><strong id="stat-ml-alerts">00</strong></dd></div>
+                <div class="stat"><dt>Compra automática</dt><dd><strong id="stat-ml-auto">00</strong></dd></div>
+              </dl>
+            </section>
           </section>
         </section>
-      </section>
-      <details id="purchase-panel" class="purchase-section purchase-panel">
-      <summary class="purchase-panel-summary"><span class="purchase-panel-icon" data-icon="qr"></span><span class="purchase-panel-copy"><span class="purchase-panel-title" id="purchases-title">Pedidos <span id="purchase-count" class="purchase-count">0</span></span><span id="purchase-summary-meta" class="purchase-panel-meta">Seu histórico de pedidos, em um só lugar.</span></span><span id="purchase-attention" class="purchase-attention" hidden></span><span class="purchase-chevron" data-icon="chevron"></span></summary>
-        <div class="purchase-panel-body"><div class="purchase-panel-toolbar"><p id="purchase-status">Geração automática desativada.</p><button id="notification-test" class="button secondary"><span data-icon="bell"></span>Testar notificação</button></div><div id="purchase-orders" class="purchase-orders"></div><p id="notification-status" class="notification-status" role="status"></p></div>
-      </details>
-      <section class="products-section" aria-labelledby="products-heading">
-        <div class="section-heading"><button class="button secondary" id="global-history">Histórico global</button><div><h2 id="products-heading">Produtos monitorados <span id="total-badge">0</span></h2></div><span class="sample-note"><span data-icon="info"></span> Datas e horários de Brasília</span></div>
-        <div class="toolbar"><div class="store-tabs" role="tablist" aria-label="Filtrar por plataforma"><button class="store-tab active" id="tab-all" role="tab" aria-selected="true" data-store="all">Todas <span id="count-all">0</span></button><button class="store-tab" id="tab-amazon" role="tab" aria-selected="false" data-store="amazon"><b class="store-logo amazon">a</b> Amazon <span id="count-amazon">0/10</span></button><button class="store-tab" id="tab-ml" role="tab" aria-selected="false" data-store="ml"><b class="store-logo ml">m</b> Mercado Livre <span id="count-ml">0/10</span></button></div><label class="available-filter"><input id="available-only" type="checkbox"> Apenas disponíveis</label><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="Buscar produto" aria-label="Buscar produto"></label></div>
-        <div id="product-list" class="product-list">
-          <section class="product-column" data-store="amazon" aria-label="Produtos da Amazon">
-            <h3 class="product-column-title">Amazon</h3>
-            <div class="product-grid"></div>
-            <p class="product-column-empty" hidden>Nenhum produto neste filtro</p>
+        <details id="purchase-panel" class="purchase-section purchase-panel">
+        <summary class="purchase-panel-summary"><span class="purchase-panel-icon" data-icon="qr"></span><span class="purchase-panel-copy"><span class="purchase-panel-title" id="purchases-title">Pedidos <span id="purchase-count" class="purchase-count">0</span></span><span id="purchase-summary-meta" class="purchase-panel-meta">Seu histórico de pedidos, em um só lugar.</span></span><span id="purchase-attention" class="purchase-attention" hidden></span><span class="purchase-chevron" data-icon="chevron"></span></summary>
+          <div class="purchase-panel-body"><div class="purchase-panel-toolbar"><p id="purchase-status">Geração automática desativada.</p><button id="notification-test" class="button secondary"><span data-icon="bell"></span>Testar notificação</button></div><div id="purchase-orders" class="purchase-orders"></div><p id="notification-status" class="notification-status" role="status"></p></div>
+        </details>
+        <section class="products-section" aria-labelledby="products-heading">
+          <div class="section-heading"><button class="button secondary" id="global-history">Histórico global</button><div><h2 id="products-heading">Produtos monitorados <span id="total-badge">0</span></h2></div><span class="sample-note"><span data-icon="info"></span> Datas e horários de Brasília</span></div>
+          <div class="toolbar"><div class="store-tabs" role="tablist" aria-label="Filtrar por plataforma"><button class="store-tab active" id="tab-all" role="tab" aria-selected="true" data-store="all">Todas <span id="count-all">0</span></button><button class="store-tab" id="tab-amazon" role="tab" aria-selected="false" data-store="amazon"><b class="store-logo amazon">a</b> Amazon <span id="count-amazon">0/10</span></button><button class="store-tab" id="tab-ml" role="tab" aria-selected="false" data-store="ml"><b class="store-logo ml">m</b> Mercado Livre <span id="count-ml">0/10</span></button></div><label class="available-filter"><input id="available-only" type="checkbox"> Apenas disponíveis</label><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="Buscar produto" aria-label="Buscar produto"></label></div>
+          <div id="product-list" class="product-list">
+            <section class="product-column" data-store="amazon" aria-label="Produtos da Amazon">
+              <h3 class="product-column-title">Amazon</h3>
+              <div class="product-grid"></div>
+              <p class="product-column-empty" hidden>Nenhum produto neste filtro</p>
+            </section>
+            <section class="product-column" data-store="ml" aria-label="Produtos do Mercado Livre">
+              <h3 class="product-column-title">Mercado Livre</h3>
+              <div class="product-grid"></div>
+              <p class="product-column-empty" hidden>Nenhum produto neste filtro</p>
+            </section>
+          </div>
+          <div id="empty-state" class="empty-state" hidden><span data-icon="search"></span><h3>Nenhum produto por aqui</h3><p id="empty-message">Tente buscar por outro nome ou adicione um produto.</p><button class="button secondary" id="empty-add"><span data-icon="plus"></span>Adicionar produto</button></div>
+          <div class="list-footer"><span id="list-summary">Carregando…</span><span id="storage-sync-note"><span class="status-dot"></span> Salvo localmente</span></div>
+        </section>
+      </div>
+      <section id="admin-view" class="admin-view" aria-labelledby="admin-view-title" hidden>
+        <div class="page-heading">
+          <div>
+            <h1 id="admin-view-title">Administração de acessos</h1>
+            <p>Gerencie os Gmails autorizados a entrar no Vigia e sincronizar produtos e configurações no servidor VPS.</p>
+          </div>
+          <button type="button" class="button secondary" id="admin-refresh"><span data-icon="refresh"></span>Atualizar lista</button>
+        </div>
+        <div id="admin-offline-notice" class="inline-notice admin-offline-notice" hidden>
+          <span data-icon="info"></span>
+          <span>Você está em modo offline. A gestão de acessos exige conexão com o servidor VPS; as ações de alteração estão desabilitadas até reconectar.</span>
+        </div>
+        <dl class="admin-stats-grid" aria-label="Resumo de contas autorizadas">
+          <div class="admin-stat-card"><dt>Contas autorizadas</dt><dd><strong id="admin-stat-total">00</strong></dd></div>
+          <div class="admin-stat-card"><dt>Administradores</dt><dd><strong id="admin-stat-admins">00</strong></dd></div>
+          <div class="admin-stat-card"><dt>Usuários</dt><dd><strong id="admin-stat-users">00</strong></dd></div>
+          <div class="admin-stat-card admin-stat-active"><dt>Contas ativas (com login)</dt><dd><strong id="admin-stat-active">00</strong></dd></div>
+        </dl>
+        <div class="admin-layout">
+          <section class="admin-card" aria-labelledby="admin-authorize-heading">
+            <div class="admin-card-header">
+              <div>
+                <h2 id="admin-authorize-heading">Autorizar novo Gmail</h2>
+                <p>Libere o acesso de uma nova conta ou atualize o papel e a nota de um Gmail já cadastrado.</p>
+              </div>
+            </div>
+            <form id="admin-allowlist-form" class="admin-allowlist-form">
+              <label class="field">Gmail<input id="admin-email-input" type="email" placeholder="usuario@gmail.com" autocomplete="off" required></label>
+              <label class="field">Papel<select id="admin-role-input"><option value="user">Usuário</option><option value="admin">Administrador</option></select></label>
+              <label class="field">Nota (opcional)<input id="admin-note-input" type="text" maxlength="100" placeholder="Ex.: Conta do João"></label>
+              <p id="admin-allowlist-error" class="form-error" role="alert"></p>
+              <button type="submit" id="admin-submit-btn" class="button primary"><span data-icon="plus"></span>Autorizar acesso</button>
+            </form>
           </section>
-          <section class="product-column" data-store="ml" aria-label="Produtos do Mercado Livre">
-            <h3 class="product-column-title">Mercado Livre</h3>
-            <div class="product-grid"></div>
-            <p class="product-column-empty" hidden>Nenhum produto neste filtro</p>
+          <section class="admin-card" aria-labelledby="admin-accounts-heading">
+            <div class="admin-card-header">
+              <div>
+                <h2 id="admin-accounts-heading">Contas autorizadas <span id="admin-list-count" class="admin-count">0</span></h2>
+                <p>Revogar um acesso encerra imediatamente a sessão e o monitoramento da conta.</p>
+              </div>
+            </div>
+            <div class="admin-toolbar">
+              <label class="search admin-search"><span data-icon="search"></span><input id="admin-search" type="search" placeholder="Buscar por e-mail, nome ou nota" aria-label="Buscar conta autorizada"></label>
+              <select id="admin-role-filter" class="admin-role-filter" aria-label="Filtrar por papel">
+                <option value="all">Todos</option>
+                <option value="admin">Administradores</option>
+                <option value="user">Usuários</option>
+              </select>
+            </div>
+            <div id="admin-allowlist-list" class="admin-allowlist-list"></div>
           </section>
         </div>
-        <div id="empty-state" class="empty-state" hidden><span data-icon="search"></span><h3>Nenhum produto por aqui</h3><p id="empty-message">Tente buscar por outro nome ou adicione um produto.</p><button class="button secondary" id="empty-add"><span data-icon="plus"></span>Adicionar produto</button></div>
-        <div class="list-footer"><span id="list-summary">Carregando…</span><span id="storage-sync-note"><span class="status-dot"></span> Salvo localmente</span></div>
       </section>
       <div class="footnote"><span data-icon="shield"></span><p>No Pix, o pagamento é feito manualmente no seu banco; no cartão, a cobrança ocorre no checkout.</p><span id="app-version">Vigia · 0.11.0</span></div>
     </main>
@@ -98,7 +154,6 @@
     <div class="settings-tabs settings-platforms" role="tablist" aria-label="Plataformas">
       <button type="button" id="settings-tab-amazon" role="tab" aria-selected="true" aria-controls="settings-amazon" class="settings-tab active">Amazon</button>
       <button type="button" id="settings-tab-ml" role="tab" aria-selected="false" aria-controls="settings-ml" class="settings-tab" tabindex="-1">Mercado Livre</button>
-      <button type="button" id="settings-tab-admin" role="tab" aria-selected="false" aria-controls="settings-admin" class="settings-tab" tabindex="-1" hidden>Acessos (Admin)</button>
     </div>
     <div class="dialog-body">
       <section id="settings-amazon" role="tabpanel" aria-labelledby="settings-tab-amazon">
@@ -118,9 +173,9 @@
         </section>
         <section id="settings-amazon-purchase" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-amazon-purchase" tabindex="0" hidden>
           <p class="inline-notice" data-settings-lock-note hidden>Pare o monitoramento para editar as regras de compra.</p>
-          <div class="availability-rule"><label class="rule-checkbox"><input id="amazon-purchase-enabled" type="checkbox">Ativar compra automática na Amazon</label><p>O pedido é criado no perfil Compra. No Pix, o pagamento é manual; no cartão, a cobrança ocorre à vista (1x sem juros) no checkout.</p></div>
-          <div class="availability-rule"><label class="field">Forma de pagamento<select id="amazon-purchase-payment-method"><option value="pix">Pix · pagamento manual</option><option value="credit_card">Cartão de crédito salvo · à vista</option></select></label><label class="field" id="amazon-purchase-card-field" hidden>Final do cartão salvo no perfil Compra<input id="amazon-purchase-card-last-four" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off" placeholder="4 dígitos"><small>O cartão salvo é cobrado à vista (1x sem juros) no checkout da Amazon. Ofertas parceladas ou com juros são bloqueadas.</small></label></div>
-          <div class="availability-rule purchase-settings"><h3>Frete</h3><label class="rule-checkbox"><input id="amazon-purchase-free-shipping" type="checkbox">Exigir frete grátis</label><label class="field">Teto de frete por pedido (R$)<input id="amazon-purchase-max-shipping" type="text" inputmode="decimal" maxlength="15" placeholder="Sem teto"></label><label class="rule-checkbox"><input id="amazon-purchase-include-shipping" type="checkbox">Incluir frete no preço limite por unidade</label></div>
+          <div class="availability-rule"><label class="rule-checkbox"><input id="amazon-purchase-enabled" type="checkbox">Ativar compra automática na Amazon</label><p>Cada produto habilitado é comprado individualmente no perfil Compra assim que atingir as regras.</p></div>
+          <div class="availability-rule"><label class="field">Forma de pagamento<select id="amazon-purchase-payment-method"><option value="pix">Pix · pagamento manual</option><option value="credit_card">Cartão de crédito salvo · à vista</option></select></label><label class="field" id="amazon-purchase-card-field" hidden>Final do cartão salvo no perfil Compra<input id="amazon-purchase-card-last-four" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off" placeholder="4 dígitos"><small>O cartão salvo é cobrado à vista (1x sem juros) no checkout. Ofertas parceladas ou com juros são bloqueadas.</small></label></div>
+          <div class="availability-rule purchase-settings"><h3>Frete</h3><label class="rule-checkbox"><input id="amazon-purchase-free-shipping" type="checkbox">Exigir frete grátis e confirmar novamente no checkout</label><label class="field">Teto de frete por pedido (R$)<input id="amazon-purchase-max-shipping" type="text" inputmode="decimal" maxlength="15" placeholder="Sem teto"><small>Zero exige frete total zero. Em branco, não há teto adicional.</small></label><label class="rule-checkbox"><input id="amazon-purchase-include-shipping" type="checkbox">Incluir o frete no preço limite por unidade</label><p>Quando marcado, o frete da oferta é somado ao valor unitário antes de conferir o preço limite configurado.</p></div>
         </section>
       </section>
       <section id="settings-ml" role="tabpanel" aria-labelledby="settings-tab-ml" hidden>
@@ -140,23 +195,10 @@
         </section>
         <section id="settings-ml-purchase" class="settings-section" role="tabpanel" aria-labelledby="settings-tab-ml-purchase" tabindex="0" hidden>
           <p class="inline-notice" data-settings-lock-note hidden>Pare o monitoramento para editar as regras de compra.</p>
-        <div class="availability-rule"><label class="rule-checkbox"><input id="purchase-enabled" type="checkbox">Ativar compra automática no Mercado Livre</label><p>Após o ciclo completo, os produtos habilitados entram no mesmo lote.</p></div>
-          <div class="availability-rule"><label class="field">Forma de pagamento<select id="purchase-payment-method"><option value="pix">Pix · pagamento manual</option><option value="credit_card">Cartão de crédito salvo · à vista</option><option value="pix_with_discount">Pix com desconto, senão cartão</option></select></label><label class="field" id="purchase-card-field" hidden>Final do cartão salvo no perfil Compra<input id="purchase-card-last-four" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off" placeholder="4 dígitos"><small>O cartão é cobrado no checkout. Se o Mercado Livre pedir o código de segurança, preencha na janela da loja.</small></label></div>
-        <div class="availability-rule purchase-settings"><h3>Frete</h3><label class="rule-checkbox"><input id="purchase-free-shipping" type="checkbox">Exigir frete grátis no carrinho e confirmar novamente no checkout</label><label class="field">Teto de frete por pedido (R$)<input id="purchase-max-shipping" type="text" inputmode="decimal" maxlength="15" placeholder="Sem teto"><small>Zero exige frete total zero. Em branco, não há teto adicional.</small></label><label class="rule-checkbox"><input id="purchase-include-shipping" type="checkbox">Incluir a parcela do frete no preço limite por unidade</label><p>Frete compartilhado é rateado proporcionalmente ao subtotal dos produtos. Quantidades menores podem alterar o preço e o frete, que serão conferidos novamente.</p></div>
+          <div class="availability-rule"><label class="rule-checkbox"><input id="purchase-enabled" type="checkbox">Ativar compra automática no Mercado Livre</label><p>Após o ciclo completo, os produtos habilitados entram no mesmo lote no perfil Compra.</p></div>
+          <div class="availability-rule"><label class="field">Forma de pagamento<select id="purchase-payment-method"><option value="pix">Pix · pagamento manual</option><option value="credit_card">Cartão de crédito salvo · à vista</option><option value="pix_with_discount">Pix com desconto, senão cartão</option></select></label><label class="field" id="purchase-card-field" hidden>Final do cartão salvo no perfil Compra<input id="purchase-card-last-four" type="text" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" autocomplete="off" placeholder="4 dígitos"><small>O cartão salvo é cobrado à vista no checkout. Se o Mercado Livre pedir o código de segurança, preencha na janela da loja.</small></label></div>
+          <div class="availability-rule purchase-settings"><h3>Frete</h3><label class="rule-checkbox"><input id="purchase-free-shipping" type="checkbox">Exigir frete grátis no carrinho e confirmar novamente no checkout</label><label class="field">Teto de frete por pedido (R$)<input id="purchase-max-shipping" type="text" inputmode="decimal" maxlength="15" placeholder="Sem teto"><small>Zero exige frete total zero. Em branco, não há teto adicional.</small></label><label class="rule-checkbox"><input id="purchase-include-shipping" type="checkbox">Incluir o frete no preço limite por unidade</label><p>Frete compartilhado é rateado proporcionalmente ao subtotal dos produtos. Quantidades menores podem alterar o preço e o frete, que serão conferidos novamente.</p></div>
         </section>
-      </section>
-      <section id="settings-admin" role="tabpanel" aria-labelledby="settings-tab-admin" hidden>
-        <p class="dialog-intro">Gerencie os Gmails autorizados a entrar no Vigia e sincronizar produtos e preferências no seu servidor VPS.</p>
-        <form id="admin-allowlist-form" class="admin-allowlist-form">
-          <label class="field">Gmail autorizado<input id="admin-email-input" type="email" placeholder="usuario@gmail.com" required></label>
-          <div class="admin-allowlist-row">
-            <label class="field">Papel<select id="admin-role-input"><option value="user">Usuário</option><option value="admin">Administrador</option></select></label>
-            <label class="field">Nota (opcional)<input id="admin-note-input" type="text" maxlength="100" placeholder="Ex.: Conta do João"></label>
-          </div>
-          <button type="submit" class="button primary">Autorizar Gmail</button>
-        </form>
-        <p id="admin-allowlist-error" class="form-error" role="alert"></p>
-        <div id="admin-allowlist-list" class="admin-allowlist-list"></div>
       </section>
     </div>
     <div class="dialog-footer">
@@ -167,6 +209,7 @@
   </dialog>
   <dialog id="remove-dialog" aria-labelledby="remove-title"><div class="dialog-header"><h2 id="remove-title">Remover do radar?</h2><button class="icon-button" data-close="remove-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="remove-message"></p><p class="dialog-intro">O produto e suas regras serão removidos do cadastro do painel.</p></div><div class="dialog-footer"><button class="button secondary" data-close="remove-dialog">Cancelar</button><button class="button danger" id="confirm-remove">Remover produto</button></div></dialog>
   <dialog id="logout-dialog" aria-labelledby="logout-title"><div class="dialog-header"><h2 id="logout-title">Sair da conta?</h2><button type="button" class="icon-button" data-close="logout-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="logout-message"></p><p class="dialog-intro">Você precisará entrar novamente com sua conta Google para acessar seus produtos e sincronizar configurações.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="logout-dialog">Cancelar</button><button type="button" class="button danger" id="confirm-logout">Sair da conta</button></div></dialog>
+  <dialog id="revoke-access-dialog" aria-labelledby="revoke-access-title"><div class="dialog-header"><h2 id="revoke-access-title">Revogar acesso?</h2><button type="button" class="icon-button" data-close="revoke-access-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="revoke-access-message"></p><p class="dialog-intro">A sessão e o monitoramento desta conta serão encerrados imediatamente. Ela não poderá acessar o Vigia até ser autorizada novamente.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="revoke-access-dialog">Cancelar</button><button type="button" class="button danger" id="confirm-revoke-access">Revogar acesso</button></div></dialog>
   <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-header"><div><h2 id="history-title">Histórico de disponibilidade</h2><p id="history-product" class="dialog-intro"></p></div><button class="icon-button" data-close="history-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p class="dialog-intro">Ofertas confirmadas dentro dos filtros vigentes na leitura. Horários de Brasília. Alterações atuais não modificam os registros anteriores.</p><div class="history-toolbar"><label>Buscar produto<input id="history-search" type="search" placeholder="Nome, anúncio ou vendedor"></label><label>Plataforma<select id="history-store"><option value="all">Todas</option><option value="amazon">Amazon</option><option value="ml">Mercado Livre</option></select></label><label>Período<select id="history-period"><option value="all">Todo o histórico</option><option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></label><label>Ordenar<select id="history-sort"><option value="recent">Mais recentes</option><option value="oldest">Mais antigos</option><option value="price">Menor preço</option></select></label></div><div id="history-stats" class="history-stats"></div><div id="history-content"></div></div></dialog>
   <div id="update-banner" class="update-banner" role="status" aria-live="polite" hidden>
     <span class="update-spinner" aria-hidden="true"></span>

@@ -26,6 +26,7 @@ const icons = {
   trash: '<path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/>',
   x: '<path d="m6 6 12 12M6 18 18 6"/>',
   flask: '<path d="M9 3h6M10 3v7L4 20h16l-6-10V3M7 15h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.box}</svg>`;
 function hydrateIcons(root = document) {
@@ -227,7 +228,9 @@ document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if
   $('settings-dialog').showModal();
   document.querySelector('.settings-platforms .settings-tab.active').focus();
 }));
-$('nav-products').addEventListener('click',()=>{currentStore='all';$('search').value='';setTabs();render();window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});});
+$('nav-products').addEventListener('click',()=>{currentStore='all';$('search').value='';setTabs();render();setView('products');});
+$('brand-home')?.addEventListener('click',e=>{e.preventDefault();setView('products');});
+$('nav-admin')?.addEventListener('click',()=>{setView('admin');});
 ['add-top','empty-add'].forEach(id=>$(id).addEventListener('click',openProductDialog));
 document.querySelectorAll('.store-tab').forEach(b=>b.addEventListener('click',()=>{currentStore=b.dataset.store;setTabs();render();}));
 document.querySelector('.store-tabs').addEventListener('keydown',e=>{const tabs=[...document.querySelectorAll('.store-tab')],i=tabs.indexOf(document.activeElement);if(i<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();tabs[e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length].click();document.querySelector('.store-tab.active').focus();});
@@ -437,7 +440,7 @@ async function refresh(){
   // Avoid replacing an input while the user types a target price.
   if(document.activeElement?.matches('.target-input,.quantity-input,.pix-code'))return;
   try{applyState(await api('state'));}
-  catch{connected=false;updateStats();updateMonitor();}
+  catch{connected=false;updateStats();updateMonitor();syncAdminControls();}
 }
 hydrateIcons();setTabs();render();updateMonitor();
 if(location.protocol==='file:'){toast('Para usar o monitoramento real, abra o Vigia pelo aplicativo.');}
@@ -470,13 +473,68 @@ function renderAvailabilityHistory(){
 }
 
 let waitingForUpdateReload = false;
+let activeView = 'products';
+let adminEntries = [];
+let adminBusy = false;
+let pendingRevokeEmail = null;
+
+function canAccessAdmin(auth) {
+  return Boolean(auth?.enabled && auth.authenticated && auth.user?.role === 'admin');
+}
+
+function isAdminWriteLocked() {
+  return !connected || !canAccessAdmin(state?.auth) || Boolean(state?.auth?.offlineMode) || adminBusy;
+}
+
+function syncAdminControls() {
+  const isOffline = Boolean(state?.auth?.offlineMode);
+  const locked = isAdminWriteLocked();
+  const offlineNotice = $('admin-offline-notice');
+  if (offlineNotice) offlineNotice.hidden = !isOffline;
+  for (const id of ['admin-email-input', 'admin-role-input', 'admin-note-input', 'admin-submit-btn']) {
+    const el = $(id);
+    if (el) el.disabled = locked;
+  }
+  const refreshBtn = $('admin-refresh');
+  if (refreshBtn) refreshBtn.disabled = locked;
+  if (activeView === 'admin') {
+    document.querySelectorAll('#admin-allowlist-list [data-toggle-role-email], #admin-allowlist-list [data-revoke-email]').forEach(btn => {
+      btn.disabled = locked;
+    });
+  }
+}
+
+function setView(view) {
+  const next = view === 'admin' && canAccessAdmin(state?.auth) ? 'admin' : 'products';
+  const changed = activeView !== next;
+  activeView = next;
+  const productsView = $('products-view');
+  const adminView = $('admin-view');
+  if (productsView) productsView.hidden = next !== 'products';
+  if (adminView) adminView.hidden = next !== 'admin';
+  $('nav-products')?.classList.toggle('active', next === 'products');
+  $('nav-admin')?.classList.toggle('active', next === 'admin');
+  const breadcrumb = $('breadcrumb-current');
+  if (breadcrumb) breadcrumb.textContent = next === 'admin' ? 'Administração' : 'Produtos';
+  window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+  if (next === 'admin') {
+    syncAdminControls();
+    if (changed || !adminEntries.length) {
+      if (state?.auth?.offlineMode) {
+        renderAdminAllowlist();
+      } else {
+        void loadAdminAllowlist();
+      }
+    }
+  }
+}
 
 function updateAuth() {
   const auth = state?.auth;
   const upd = state?.update;
   const gate = $('auth-gate');
   const pill = $('auth-user-pill');
-  const adminTab = $('settings-tab-admin');
+  const navAdmin = $('nav-admin');
   const banner = $('update-banner');
   const bannerText = $('update-banner-text');
 
@@ -504,16 +562,23 @@ function updateAuth() {
     syncNote.innerHTML = `<span class="status-dot ${synced ? 'green' : ''}"></span> ${synced ? 'Sincronizado automaticamente' : 'Salvo localmente'}`;
   }
 
+  const isAdmin = canAccessAdmin(auth);
+  if (navAdmin) navAdmin.hidden = !isAdmin;
+  if (!isAdmin) {
+    adminEntries = [];
+    pendingRevokeEmail = null;
+    if ($('revoke-access-dialog')?.open) $('revoke-access-dialog').close();
+    if (activeView === 'admin') setView('products');
+  }
+
   if (!auth || !auth.enabled) {
     if (gate) gate.hidden = true;
     if (pill) pill.hidden = true;
-    if (adminTab) adminTab.hidden = true;
     return;
   }
   if (!auth.authenticated) {
     if (gate) gate.hidden = false;
     if (pill) pill.hidden = true;
-    if (adminTab) adminTab.hidden = true;
     const btn = $('auth-google-btn');
     if (btn && auth.loginUrl) btn.href = auth.loginUrl;
     const note = $('auth-gate-note');
@@ -549,41 +614,101 @@ function updateAuth() {
       avatarEl.hidden = true;
     }
   }
-  if (adminTab) adminTab.hidden = auth.user?.role !== 'admin' || auth.offlineMode;
+  syncAdminControls();
+}
+
+function updateAdminStats() {
+  const total = adminEntries.length;
+  const admins = adminEntries.filter(e => e.role === 'admin').length;
+  const users = total - admins;
+  const active = adminEntries.filter(e => Boolean(e.lastLoginAt)).length;
+  const pad = n => String(n).padStart(2, '0');
+  if ($('admin-stat-total')) $('admin-stat-total').textContent = pad(total);
+  if ($('admin-stat-admins')) $('admin-stat-admins').textContent = pad(admins);
+  if ($('admin-stat-users')) $('admin-stat-users').textContent = pad(users);
+  if ($('admin-stat-active')) $('admin-stat-active').textContent = pad(active);
 }
 
 async function loadAdminAllowlist() {
   const list = $('admin-allowlist-list');
   const errEl = $('admin-allowlist-error');
   if (!list) return;
-  errEl.textContent = '';
-  list.textContent = 'Carregando lista de acessos…';
+  if (state?.auth?.offlineMode) {
+    renderAdminAllowlist();
+    return;
+  }
+  if (errEl) errEl.textContent = '';
+  list.innerHTML = '<div class="admin-empty">Carregando lista de acessos…</div>';
+  adminBusy = true;
+  syncAdminControls();
   try {
     const { entries } = await api('admin/allowlist');
-    renderAdminAllowlist(entries ?? []);
+    adminEntries = Array.isArray(entries) ? entries : [];
+    renderAdminAllowlist();
   } catch (err) {
-    errEl.textContent = err.message;
-    list.textContent = '';
+    if (errEl) errEl.textContent = err.message;
+    list.innerHTML = '<div class="admin-empty">Não foi possível carregar as contas autorizadas.</div>';
+  } finally {
+    adminBusy = false;
+    syncAdminControls();
   }
 }
 
-function renderAdminAllowlist(entries) {
+function renderAdminAllowlist() {
+  updateAdminStats();
   const list = $('admin-allowlist-list');
   if (!list) return;
-  if (!entries.length) {
-    list.innerHTML = '<p class="dialog-intro">Nenhum Gmail cadastrado.</p>';
+  const query = ($('admin-search')?.value ?? '').trim().toLocaleLowerCase('pt-BR');
+  const roleFilter = $('admin-role-filter')?.value ?? 'all';
+  const filtered = adminEntries.filter(entry => {
+    if (roleFilter !== 'all' && entry.role !== roleFilter) return false;
+    if (!query) return true;
+    return [entry.email, entry.name, entry.note]
+      .some(value => String(value ?? '').toLocaleLowerCase('pt-BR').includes(query));
+  });
+  const countEl = $('admin-list-count');
+  if (countEl) {
+    countEl.textContent = filtered.length === adminEntries.length
+      ? String(adminEntries.length)
+      : `${filtered.length}/${adminEntries.length}`;
+  }
+  if (!adminEntries.length) {
+    list.innerHTML = `<div class="admin-empty">${state?.auth?.offlineMode ? 'Conecte-se à VPS para visualizar e gerenciar as contas autorizadas.' : 'Nenhum Gmail cadastrado.'}</div>`;
+    return;
+  }
+  if (!filtered.length) {
+    list.innerHTML = '<div class="admin-empty">Nenhuma conta corresponde aos filtros atuais.</div>';
     return;
   }
   const currentEmail = state?.auth?.user?.email;
-  list.innerHTML = entries.map(entry => `
-    <div class="admin-allowlist-item">
-      <div class="admin-allowlist-meta">
-        <strong>${escapeHtml(entry.email)} <span class="badge ${entry.role === 'admin' ? 'ok' : 'neutral'}">${entry.role === 'admin' ? 'Admin' : 'Usuário'}</span></strong>
-        <small>${entry.note ? escapeHtml(entry.note) + ' · ' : ''}${entry.lastLoginAt ? 'Último login: ' + escapeHtml(formatTime(entry.lastLoginAt)) : 'Nunca entrou'}</small>
+  const locked = isAdminWriteLocked();
+  list.innerHTML = filtered.map(entry => {
+    const isSelf = entry.email === currentEmail;
+    const isAdminRole = entry.role === 'admin';
+    const nextRole = isAdminRole ? 'user' : 'admin';
+    const toggleLabel = isAdminRole ? 'Tornar Usuário' : 'Tornar Admin';
+    const lastLogin = entry.lastLoginAt ? `Último login: ${formatTime(entry.lastLoginAt)}` : 'Nunca entrou';
+    const details = [entry.note ? `Nota: ${entry.note}` : null, lastLogin].filter(Boolean).join(' · ');
+    return `
+      <div class="admin-allowlist-item">
+        <div class="admin-allowlist-meta">
+          <div class="admin-allowlist-title">
+            <strong>${escapeHtml(entry.email)}</strong>
+            <span class="badge ${isAdminRole ? 'available' : 'neutral'}">${isAdminRole ? 'Admin' : 'Usuário'}</span>
+            ${isSelf ? '<span class="badge neutral">Você</span>' : ''}
+          </div>
+          ${entry.name ? `<span class="admin-allowlist-sub">${escapeHtml(entry.name)}</span>` : ''}
+          <small>${escapeHtml(details)}</small>
+        </div>
+        ${isSelf ? '' : `
+          <div class="admin-allowlist-actions">
+            <button type="button" class="button secondary" data-toggle-role-email="${escapeHtml(entry.email)}" data-next-role="${nextRole}" ${locked ? 'disabled' : ''}>${toggleLabel}</button>
+            <button type="button" class="button danger" data-revoke-email="${escapeHtml(entry.email)}" ${locked ? 'disabled' : ''}>Revogar acesso</button>
+          </div>
+        `}
       </div>
-      ${entry.email === currentEmail ? '' : `<button type="button" class="button secondary" data-remove-allowlist="${escapeHtml(entry.email)}">Remover</button>`}
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 $('auth-logout')?.addEventListener('click', () => {
@@ -603,14 +728,19 @@ $('confirm-logout')?.addEventListener('click', async () => {
   }
 });
 
-$('settings-tab-admin')?.addEventListener('click', () => {
+$('admin-refresh')?.addEventListener('click', () => {
   void loadAdminAllowlist();
 });
+$('admin-search')?.addEventListener('input', renderAdminAllowlist);
+$('admin-role-filter')?.addEventListener('change', renderAdminAllowlist);
 
 $('admin-allowlist-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (isAdminWriteLocked()) return;
   const errEl = $('admin-allowlist-error');
-  errEl.textContent = '';
+  if (errEl) errEl.textContent = '';
+  adminBusy = true;
+  syncAdminControls();
   try {
     const email = $('admin-email-input').value.trim();
     const role = $('admin-role-input').value;
@@ -618,25 +748,72 @@ $('admin-allowlist-form')?.addEventListener('submit', async (e) => {
     const result = await api('admin/allowlist', 'POST', { email, role, note });
     $('admin-email-input').value = '';
     $('admin-note-input').value = '';
-    renderAdminAllowlist(result.entries ?? []);
+    adminEntries = Array.isArray(result.entries) ? result.entries : [];
+    renderAdminAllowlist();
     toast(`Acesso liberado para ${email}.`);
   } catch (err) {
-    errEl.textContent = err.message;
+    if (errEl) errEl.textContent = err.message;
+  } finally {
+    adminBusy = false;
+    syncAdminControls();
   }
 });
 
 $('admin-allowlist-list')?.addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-remove-allowlist]');
-  if (!btn) return;
-  const email = btn.dataset.removeAllowlist;
+  const toggleBtn = e.target.closest('[data-toggle-role-email]');
+  if (toggleBtn) {
+    if (isAdminWriteLocked()) return;
+    const email = toggleBtn.dataset.toggleRoleEmail;
+    const nextRole = toggleBtn.dataset.nextRole === 'admin' ? 'admin' : 'user';
+    const existing = adminEntries.find(item => item.email === email);
+    const errEl = $('admin-allowlist-error');
+    if (errEl) errEl.textContent = '';
+    adminBusy = true;
+    syncAdminControls();
+    try {
+      const result = await api('admin/allowlist', 'POST', { email, role: nextRole, note: existing?.note ?? '' });
+      adminEntries = Array.isArray(result.entries) ? result.entries : [];
+      renderAdminAllowlist();
+      toast(`Papel de ${email} atualizado para ${nextRole === 'admin' ? 'Administrador' : 'Usuário'}.`);
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message;
+      toast(err.message);
+    } finally {
+      adminBusy = false;
+      syncAdminControls();
+    }
+    return;
+  }
+
+  const revokeBtn = e.target.closest('[data-revoke-email]');
+  if (!revokeBtn || isAdminWriteLocked()) return;
+  pendingRevokeEmail = revokeBtn.dataset.revokeEmail;
+  const msg = $('revoke-access-message');
+  if (msg) msg.textContent = `Revogar o acesso de ${pendingRevokeEmail}?`;
+  $('revoke-access-dialog')?.showModal();
+});
+
+$('confirm-revoke-access')?.addEventListener('click', async () => {
+  if (!pendingRevokeEmail || isAdminWriteLocked()) return;
+  const email = pendingRevokeEmail;
   const errEl = $('admin-allowlist-error');
-  errEl.textContent = '';
+  if (errEl) errEl.textContent = '';
+  adminBusy = true;
+  syncAdminControls();
   try {
     const result = await api('admin/allowlist/' + encodeURIComponent(email), 'DELETE', {});
-    renderAdminAllowlist(result.entries ?? []);
-    toast(`Acesso removido de ${email}.`);
+    pendingRevokeEmail = null;
+    $('revoke-access-dialog')?.close();
+    adminEntries = Array.isArray(result.entries) ? result.entries : [];
+    renderAdminAllowlist();
+    toast(`Acesso revogado de ${email}.`);
   } catch (err) {
-    errEl.textContent = err.message;
+    if (errEl) errEl.textContent = err.message;
+    toast(err.message);
+  } finally {
+    adminBusy = false;
+    syncAdminControls();
   }
 });
+
 

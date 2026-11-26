@@ -27,7 +27,7 @@ export function validateTarListing(stdout) {
       throw new Error('Atualização bloqueada por segurança: o pacote contém links simbólicos ou hardlinks.');
     }
     const gnuMatch = line.match(/^[a-zA-Z-]{10}\s+\S+\s+\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+(.+)$/);
-    const bsdMatch = !gnuMatch ? line.match(/^[a-zA-Z-]{10}\s+\d+\s+\S+\s+\S+\s+\d+\s+\S+\s+\d+\s+\S+\s+(.+)$/) : null;
+    const bsdMatch = !gnuMatch ? line.match(/^[a-zA-Z-]{10}\s+\d+\s+\S+\s+\S+\s+\d+\s+(?:\S+\s+\d+|\d+\s+\S+)\s+\S+\s+(.+)$/) : null;
     const entryPath = (gnuMatch?.[1] ?? bsdMatch?.[1] ?? line.split(/\s+/).slice(5).join(' ')).trim();
     if (!entryPath) continue;
     if (entryPath.startsWith('/') || entryPath.startsWith('\\') || /^[a-zA-Z]:[\\/]/.test(entryPath)) {
