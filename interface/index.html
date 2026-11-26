@@ -25,6 +25,11 @@
       <div class="breadcrumb">Meu espaço <span>/</span> <strong>Produtos</strong></div>
       <div class="topbar-right">
         <span class="demo-pill"><span class="status-dot"></span> Serviço local</span>
+        <div id="auth-user-pill" class="auth-user-pill" hidden>
+          <img id="auth-user-avatar" class="auth-avatar" alt="" hidden>
+          <span id="auth-user-email" class="auth-email"></span>
+          <button type="button" id="auth-logout" class="button secondary auth-logout-btn">Sair</button>
+        </div>
         <select id="theme-select" aria-label="Tema do painel">
           <option value="light">Modo claro</option>
           <option value="dark">Modo escuro</option>
@@ -93,6 +98,7 @@
     <div class="settings-tabs settings-platforms" role="tablist" aria-label="Plataformas">
       <button type="button" id="settings-tab-amazon" role="tab" aria-selected="true" aria-controls="settings-amazon" class="settings-tab active">Amazon</button>
       <button type="button" id="settings-tab-ml" role="tab" aria-selected="false" aria-controls="settings-ml" class="settings-tab" tabindex="-1">Mercado Livre</button>
+      <button type="button" id="settings-tab-admin" role="tab" aria-selected="false" aria-controls="settings-admin" class="settings-tab" tabindex="-1" hidden>Acessos (Admin)</button>
     </div>
     <div class="dialog-body">
       <section id="settings-amazon" role="tabpanel" aria-labelledby="settings-tab-amazon">
@@ -137,6 +143,19 @@
         <div class="availability-rule purchase-settings"><h3>Frete</h3><label class="rule-checkbox"><input id="purchase-free-shipping" type="checkbox">Exigir frete grátis no carrinho e confirmar novamente no checkout</label><label class="field">Teto de frete por pedido (R$)<input id="purchase-max-shipping" type="text" inputmode="decimal" maxlength="15" placeholder="Sem teto"><small>Zero exige frete total zero. Em branco, não há teto adicional.</small></label><label class="rule-checkbox"><input id="purchase-include-shipping" type="checkbox">Incluir a parcela do frete no preço limite por unidade</label><p>Frete compartilhado é rateado proporcionalmente ao subtotal dos produtos. Quantidades menores podem alterar o preço e o frete, que serão conferidos novamente.</p></div>
         </section>
       </section>
+      <section id="settings-admin" role="tabpanel" aria-labelledby="settings-tab-admin" hidden>
+        <p class="dialog-intro">Gerencie os Gmails autorizados a entrar no Vigia e sincronizar produtos e preferências no seu servidor VPS.</p>
+        <form id="admin-allowlist-form" class="admin-allowlist-form">
+          <label class="field">Gmail autorizado<input id="admin-email-input" type="email" placeholder="usuario@gmail.com" required></label>
+          <div class="admin-allowlist-row">
+            <label class="field">Papel<select id="admin-role-input"><option value="user">Usuário</option><option value="admin">Administrador</option></select></label>
+            <label class="field">Nota (opcional)<input id="admin-note-input" type="text" maxlength="100" placeholder="Ex.: Conta do João"></label>
+          </div>
+          <button type="submit" class="button primary">Autorizar Gmail</button>
+        </form>
+        <p id="admin-allowlist-error" class="form-error" role="alert"></p>
+        <div id="admin-allowlist-list" class="admin-allowlist-list"></div>
+      </section>
     </div>
     <div class="dialog-footer">
       <p id="settings-error" class="form-error" role="alert"></p>
@@ -146,6 +165,19 @@
   </dialog>
   <dialog id="remove-dialog" aria-labelledby="remove-title"><div class="dialog-header"><h2 id="remove-title">Remover do radar?</h2><button class="icon-button" data-close="remove-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="remove-message"></p><p class="dialog-intro">O produto e suas regras serão removidos do cadastro do painel.</p></div><div class="dialog-footer"><button class="button secondary" data-close="remove-dialog">Cancelar</button><button class="button danger" id="confirm-remove">Remover produto</button></div></dialog>
   <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-header"><div><h2 id="history-title">Histórico de disponibilidade</h2><p id="history-product" class="dialog-intro"></p></div><button class="icon-button" data-close="history-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p class="dialog-intro">Ofertas confirmadas dentro dos filtros vigentes na leitura. Horários de Brasília. Alterações atuais não modificam os registros anteriores.</p><div class="history-toolbar"><label>Buscar produto<input id="history-search" type="search" placeholder="Nome, anúncio ou vendedor"></label><label>Plataforma<select id="history-store"><option value="all">Todas</option><option value="amazon">Amazon</option><option value="ml">Mercado Livre</option></select></label><label>Período<select id="history-period"><option value="all">Todo o histórico</option><option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></label><label>Ordenar<select id="history-sort"><option value="recent">Mais recentes</option><option value="oldest">Mais antigos</option><option value="price">Menor preço</option></select></label></div><div id="history-stats" class="history-stats"></div><div id="history-content"></div></div></dialog>
+  <div id="update-banner" class="update-banner" role="status" aria-live="polite" hidden>
+    <span class="update-spinner" aria-hidden="true"></span>
+    <span id="update-banner-text">Atualizando o Vigia…</span>
+  </div>
+  <div id="auth-gate" class="auth-gate" hidden>
+    <div class="auth-gate-card">
+      <div class="auth-gate-brand"><span class="brand-mark" data-icon="radar"></span><strong>vigia<span class="brand-dot">.</span></strong></div>
+      <h2>Entre com sua conta Google</h2>
+      <p>Use um Gmail autorizado para carregar seus produtos monitorados e preferências sincronizadas com o servidor.</p>
+      <a id="auth-google-btn" class="button primary auth-google-btn" href="#">Entrar com Google</a>
+      <p id="auth-gate-note" class="auth-gate-note"></p>
+    </div>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

@@ -75,7 +75,7 @@ function applyState(next){
     }
   }
   eventsPrimed=true;
-  render();updateMonitor();updateAccounts();renderPurchases();
+  render();updateMonitor();updateAccounts();renderPurchases();updateAuth();
 }
 async function action(path,method='POST',body){
   if(serviceOutdated)throw new Error(outdatedServiceMessage);
@@ -451,3 +451,159 @@ function renderAvailabilityHistory(){
    return `<details class="history-entry"><summary><span><strong>${escapeHtml(displayName(p))}</strong><small>${escapeHtml(storeNames[p.store])} · ${row.type==='PRIMEIRA_OBSERVACAO_DISPONIVEL'?'Primeira observação disponível':'Disponibilidade confirmada'} · ${escapeHtml(formatTime(row.at))}</small></span><b>${p.price==null?'Preço não informado':'R$ '+money.format(p.price)}</b></summary><div class="history-entry-body"><h3>${escapeHtml(displayName(p))}</h3><p class="history-filters">Filtros na leitura: ${escapeHtml(filters)}</p><dl>${field('Plataforma',storeNames[p.store])}${field('Anúncio',p.code)}${field('Vendido por',p.seller)}${field('ID do vendedor',p.sellerId)}${field('Entregue por',p.delivery)}${field('Frete',p.freight==null?'Não informado':'R$ '+money.format(p.freight))}${field('Reputação',p.reputationLevel)}${field('MercadoLíder',p.powerSellerStatus)}${field('Quantidade configurada',p.quantity??1)}${field('Limite por unidade',p.target==null?'Sem limite':'R$ '+money.format(p.target))}</dl><p class="history-url">${escapeHtml(p.url)}</p></div></details>`;
   }).join(''):'<div class="purchase-empty"><div><strong>Nenhuma disponibilidade neste recorte</strong><p>Ajuste os filtros ou aguarde uma nova confirmação. O histórico começa nesta atualização e funciona mesmo com os alertas desativados.</p></div></div>';
 }
+
+let waitingForUpdateReload = false;
+
+function updateAuth() {
+  const auth = state?.auth;
+  const upd = state?.update;
+  const gate = $('auth-gate');
+  const pill = $('auth-user-pill');
+  const adminTab = $('settings-tab-admin');
+  const banner = $('update-banner');
+  const bannerText = $('update-banner-text');
+
+  if (banner && bannerText) {
+    if (upd && ['downloading', 'installing', 'restarting'].includes(upd.status)) {
+      banner.hidden = false;
+      const ver = upd.availableVersion ? ` v${upd.availableVersion}` : '';
+      bannerText.textContent = upd.status === 'downloading'
+        ? `Baixando atualização${ver}…`
+        : upd.status === 'installing'
+          ? `Instalando atualização${ver}…`
+          : `Atualização${ver} pronta · reiniciando Vigia…`;
+      if (upd.status === 'restarting' && !waitingForUpdateReload) {
+        waitingForUpdateReload = true;
+        setTimeout(() => location.reload(), 2500);
+      }
+    } else {
+      banner.hidden = true;
+    }
+  }
+
+  if (!auth || !auth.enabled) {
+    if (gate) gate.hidden = true;
+    if (pill) pill.hidden = true;
+    if (adminTab) adminTab.hidden = true;
+    return;
+  }
+  if (!auth.authenticated) {
+    if (gate) gate.hidden = false;
+    if (pill) pill.hidden = true;
+    if (adminTab) adminTab.hidden = true;
+    const btn = $('auth-google-btn');
+    if (btn && auth.loginUrl) btn.href = auth.loginUrl;
+    const note = $('auth-gate-note');
+    if (note) {
+      note.textContent = auth.offlineExpired
+        ? 'Sua sessão offline expirou (mais de 7 dias sem conexão com o servidor VPS). Conecte-se para renovar.'
+        : (auth.vpsUrl ? `Servidor: ${auth.vpsUrl}` : '');
+    }
+    return;
+  }
+  if (gate) gate.hidden = true;
+  if (pill) pill.hidden = false;
+  const emailEl = $('auth-user-email');
+  if (emailEl) {
+    const statusTag = auth.offlineMode
+      ? ` · offline (${auth.offlineDaysRemaining}d)`
+      : auth.syncStatus === 'error'
+        ? ' · erro sync'
+        : auth.syncStatus === 'syncing'
+          ? ' · sincronizando…'
+          : '';
+    emailEl.textContent = (auth.user?.email ?? '') + statusTag;
+    emailEl.title = auth.lastSyncError || (auth.lastSyncedAt ? `Última sincronização: ${formatTime(auth.lastSyncedAt)}` : 'Conectado ao servidor VPS');
+  }
+  const avatarEl = $('auth-user-avatar');
+  if (avatarEl) {
+    if (auth.user?.picture) {
+      avatarEl.src = auth.user.picture;
+      avatarEl.hidden = false;
+    } else {
+      avatarEl.hidden = true;
+    }
+  }
+  if (adminTab) adminTab.hidden = auth.user?.role !== 'admin' || auth.offlineMode;
+}
+
+async function loadAdminAllowlist() {
+  const list = $('admin-allowlist-list');
+  const errEl = $('admin-allowlist-error');
+  if (!list) return;
+  errEl.textContent = '';
+  list.textContent = 'Carregando lista de acessos…';
+  try {
+    const { entries } = await api('admin/allowlist');
+    renderAdminAllowlist(entries ?? []);
+  } catch (err) {
+    errEl.textContent = err.message;
+    list.textContent = '';
+  }
+}
+
+function renderAdminAllowlist(entries) {
+  const list = $('admin-allowlist-list');
+  if (!list) return;
+  if (!entries.length) {
+    list.innerHTML = '<p class="dialog-intro">Nenhum Gmail cadastrado.</p>';
+    return;
+  }
+  const currentEmail = state?.auth?.user?.email;
+  list.innerHTML = entries.map(entry => `
+    <div class="admin-allowlist-item">
+      <div class="admin-allowlist-meta">
+        <strong>${escapeHtml(entry.email)} <span class="badge ${entry.role === 'admin' ? 'ok' : 'neutral'}">${entry.role === 'admin' ? 'Admin' : 'Usuário'}</span></strong>
+        <small>${entry.note ? escapeHtml(entry.note) + ' · ' : ''}${entry.lastLoginAt ? 'Último login: ' + escapeHtml(formatTime(entry.lastLoginAt)) : 'Nunca entrou'}</small>
+      </div>
+      ${entry.email === currentEmail ? '' : `<button type="button" class="button secondary" data-remove-allowlist="${escapeHtml(entry.email)}">Remover</button>`}
+    </div>
+  `).join('');
+}
+
+$('auth-logout')?.addEventListener('click', async () => {
+  try {
+    await action('auth/logout', 'POST', {});
+    toast('Sessão encerrada.');
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$('settings-tab-admin')?.addEventListener('click', () => {
+  void loadAdminAllowlist();
+});
+
+$('admin-allowlist-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = $('admin-allowlist-error');
+  errEl.textContent = '';
+  try {
+    const email = $('admin-email-input').value.trim();
+    const role = $('admin-role-input').value;
+    const note = $('admin-note-input').value.trim();
+    const result = await api('admin/allowlist', 'POST', { email, role, note });
+    $('admin-email-input').value = '';
+    $('admin-note-input').value = '';
+    renderAdminAllowlist(result.entries ?? []);
+    toast(`Acesso liberado para ${email}.`);
+  } catch (err) {
+    errEl.textContent = err.message;
+  }
+});
+
+$('admin-allowlist-list')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-remove-allowlist]');
+  if (!btn) return;
+  const email = btn.dataset.removeAllowlist;
+  const errEl = $('admin-allowlist-error');
+  errEl.textContent = '';
+  try {
+    const result = await api('admin/allowlist/' + encodeURIComponent(email), 'DELETE', {});
+    renderAdminAllowlist(result.entries ?? []);
+    toast(`Acesso removido de ${email}.`);
+  } catch (err) {
+    errEl.textContent = err.message;
+  }
+});
+
