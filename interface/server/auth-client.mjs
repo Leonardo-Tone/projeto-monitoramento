@@ -105,7 +105,6 @@ export class AuthClient {
   state(localOrigin = '') {
     return {
       enabled: this.enabled,
-      vpsUrl: this.vpsUrl || null,
       authenticated: this.authenticated,
       offlineMode: this.offlineMode && this.authenticated,
       offlineExpired: this.offlineExpired,

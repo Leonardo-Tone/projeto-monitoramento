@@ -70,6 +70,7 @@ test('Vigia local integrates with VPS Google OAuth and syncs products and settin
     const stateBefore = await (await fetch(`${local1}/api/state`)).json();
     assert.equal(stateBefore.auth.enabled, true);
     assert.equal(stateBefore.auth.authenticated, false);
+    assert.equal('vpsUrl' in stateBefore.auth, false);
     assert.equal(stateBefore.auth.loginUrl, '/api/auth/start');
     assert.deepEqual(stateBefore.products, []);
 

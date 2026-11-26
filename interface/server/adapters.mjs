@@ -80,16 +80,13 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
     return collect();
   });
   const baseConsultar=consultar??((asin,options)=>consultarAod(asin,{...options,fetchImpl}));
+  let pendingCaptchaProduct=null;
   const consultarFn=async(asin,options)=>{
     try{
       return await baseConsultar(asin,options);
     }catch(error){
-      if(isCaptchaError(error)&&onCaptcha){
-        const prod=byAsin.get(asin);
-        if(prod){
-          await onCaptcha(prod);
-          return await baseConsultar(asin,options);
-        }
+      if(isCaptchaError(error)&&!pendingCaptchaProduct){
+        pendingCaptchaProduct=byAsin.get(asin)??null;
       }
       throw error;
     }
@@ -107,7 +104,25 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
       config.products=validarConfig({...config,products:products.map(p=>({asin:p.code,name:p.name||p.title||p.code,enabled:true,categories:settings?.amazon.onlyAmazon?['AMAZON_DIRETA']:['AMAZON_DIRETA','TERCEIRO_ENVIO_AMAZON','TERCEIRO_ENVIO_PROPRIO'],target:{maxPriceCents:p.target==null?null:Math.round(p.target*100),priceBasis:'NORMAL',includeShipping:false}}))}).products;
     }
     pendingCycle=null;
-    const result=await originalCycle(number);
+    pendingCaptchaProduct=null;
+    let result;
+    try{
+      result=await originalCycle(number);
+    }catch(error){
+      if(!signal.aborted&&isCaptchaError(error)&&onCaptcha){
+        const captchaTarget=pendingCaptchaProduct??products[0];
+        if(captchaTarget){
+          await onCaptcha(captchaTarget);
+          if(signal.aborted)return;
+          return {tipo:'CICLO',ciclo:number,produtos:products.length,sucesso:0,falhas:products.length};
+        }
+      }
+      throw error;
+    }
+    if(pendingCaptchaProduct&&onCaptcha&&!signal.aborted){
+      await onCaptcha(pendingCaptchaProduct);
+      return result;
+    }
     // Re-verificação instantânea: re-consulta produtos Amazon que foram detectados como disponíveis.
     while(recheckQueue.length&&!signal.aborted){
       const toRecheck=[...recheckQueue];recheckQueue.length=0;
@@ -119,13 +134,13 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
           if(transport){
             const [entry]=await withMonitoringRead(()=>transport.run(async browser=>{
               await ensureAmazonPage(browser);
-              try{return [{ok:true,value:await consultarFn(asin,{timeoutMs:config.timeoutMs})}];}
+              try{return [{ok:true,value:await baseConsultar(asin,{timeoutMs:config.timeoutMs})}];}
               catch(erro){return [{ok:false,erro}];}
             }));
             if(!entry?.ok)throw entry?.erro??new Error('Falha na re-verificação Amazon.');
             dados=entry.value;
           }else{
-            dados=await withMonitoringRead(()=>consultarFn(asin,{timeoutMs:config.timeoutMs}));
+            dados=await withMonitoringRead(()=>baseConsultar(asin,{timeoutMs:config.timeoutMs}));
           }
           const configProduct=config.products.find(p=>p.asin===asin);
           if(!configProduct)continue;
@@ -135,6 +150,10 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
           onResult(product.id,observation);
         }catch(error){
           onResult(product.id,{at:new Date().toISOString(),error:error.message});
+          if(isCaptchaError(error)&&onCaptcha&&!signal.aborted){
+            await onCaptcha(product);
+            break;
+          }
         }
       }
     }
@@ -198,13 +217,13 @@ export async function collectMLProducts({traditional,catalogs,productPage,catalo
   return results;
 }
 
-export async function startML({projectRoot,dataDirectory,products,signal,onResult,onStatus,onCycle=()=>{},onDiagnostic=()=>{},withMonitoringRead=work=>work(),getProducts=null,settings,registerRecheck=()=>{},onCaptcha=null}) {
+export async function startML({projectRoot,dataDirectory,products,signal,onResult,onStatus,onCycle=()=>{},onDiagnostic=()=>{},withMonitoringRead=work=>work(),getProducts=null,settings,registerRecheck=()=>{},onCaptcha=null,transport:customTransport=null,prepareTab=prepararAba,consultProduct=consultarProduto,consultCatalog=consultarCatalogo}) {
   let productPage,catalogPage;
   const networkByPage=new WeakMap();
   const parseMetadata=createMetadataParser(projectRoot);
   const runningMessage='Monitoramento ativo · atualizações a cada 15 s';
-  const transport=monitoringRecovery({store:'ml',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,
-    clearPages:()=>{productPage=null;catalogPage=null;}});
+  const clearPages=()=>{productPage=null;catalogPage=null;};
+  const transport=customTransport??monitoringRecovery({store:'ml',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,clearPages});
   // Fila de produtos que precisam de re-verificação instantânea.
   const recheckQueue=[];
   registerRecheck(product=>{recheckQueue.push(structuredClone(product));});
@@ -212,13 +231,13 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
     const traditional=products.filter(p=>p.type==='produto');
     const catalogs=products.filter(p=>p.type==='catalogo');
     if(traditional.length&&(!productPage||productPage.isClosed?.())){
-      const bootstrap=await prepararAba(browser,'produto',traditional[0].url,'https://produto.mercadolivre.com.br',true,signal);
+      const bootstrap=await prepareTab(browser,'produto',traditional[0].url,'https://produto.mercadolivre.com.br',true,signal);
       if(!bootstrap.pronto)throw new Error(bootstrap.erro??'ML não pôde preparar a aba: '+bootstrap.motivo+'. Faça login manual nas configurações.');
       productPage=bootstrap.page;
       networkByPage.set(productPage,trackNetworkFailures(productPage));
     }
     if(catalogs.length&&(!catalogPage||catalogPage.isClosed?.())){
-      const bootstrap=await prepararAba(browser,'catalogo','https://www.mercadolivre.com.br/','https://www.mercadolivre.com.br',false,signal);
+      const bootstrap=await prepareTab(browser,'catalogo','https://www.mercadolivre.com.br/','https://www.mercadolivre.com.br',false,signal);
       if(!bootstrap.pronto)throw new Error(bootstrap.erro??'ML não pôde preparar o catálogo: '+bootstrap.motivo+'.');
       catalogPage=bootstrap.page;
       networkByPage.set(catalogPage,trackNetworkFailures(catalogPage));
@@ -235,22 +254,16 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
         signal.throwIfAborted();
         return await mlResponse(product,response,parseMetadata);
       }catch(erro){
-        if(isCaptchaError(erro)&&onCaptcha){
-          await onCaptcha(product);
-          const retryResp=await fn(page,{url:product.url},{browser,signal});
-          signal.throwIfAborted();
-          return await mlResponse(product,retryResp,parseMetadata);
-        }
         throw network.attach(erro,product.url);
       }
     };
     return collectMLProducts({traditional,catalogs,productPage,catalogPage,signal,consult:async(product,page,kind)=>
-      consult(product,page,kind==='produto'?consultarProduto:consultarCatalogo)});
+      consult(product,page,kind==='produto'?consultProduct:consultCatalog)});
   }
   async function recheckProduct(browser,product){
     await ensureMLPages(browser);
     const page=product.type==='produto'?productPage:catalogPage;
-    const fn=product.type==='produto'?consultarProduto:consultarCatalogo;
+    const fn=product.type==='produto'?consultProduct:consultCatalog;
     if(!page)return null;
     const network=networkByPage.get(page);
     network.clear(product.url);
@@ -259,13 +272,6 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
       signal.throwIfAborted();
       return await mlResponse(product,response,parseMetadata);
     }catch(erro){
-      if(isCaptchaError(erro)&&onCaptcha){
-        await onCaptcha(product);
-        const retryResp=await fn(page,{url:product.url},{browser,signal}).catch(()=>null);
-        if(retryResp){
-          try{return await mlResponse(product,retryResp,parseMetadata);}catch{}
-        }
-      }
       return {error:network.attach(erro,product.url).message};
     }
   }
@@ -278,23 +284,70 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
     onStatus('running',runningMessage);
     while(!signal.aborted){
       if(getProducts)products=await getProducts();
-      const results=await withMonitoringRead(()=>transport.run(collect));
+      let results;
+      try {
+        results=await withMonitoringRead(()=>transport.run(collect));
+      }catch(erro){
+        if(signal.aborted)break;
+        if(isCaptchaError(erro)&&onCaptcha){
+          const captchaTarget=products.find(p=>p.type==='produto')??products[0];
+          if(captchaTarget){
+            clearPages();
+            await onCaptcha(captchaTarget);
+            if(signal.aborted)break;
+            next=Date.now();
+            continue;
+          }
+        }
+        throw erro;
+      }
       if(signal.aborted)break;
       for(const {ok,product,value,erro} of results)onResult(product.id,ok?value:{error:erro.message});
+      const captchaItem=results.find(item=>!item.ok&&isCaptchaError(item.erro));
+      if(captchaItem&&onCaptcha){
+        clearPages();
+        await onCaptcha(captchaItem.product);
+        if(signal.aborted)break;
+        next=Date.now();
+        continue;
+      }
       // Re-verificação instantânea: re-consulta produtos que acabaram de ser detectados como disponíveis.
+      let recheckCaptchaTarget=null;
       while(recheckQueue.length&&!signal.aborted){
         const toRecheck=[...recheckQueue];recheckQueue.length=0;
-        const recheckResults=await withMonitoringRead(()=>transport.run(async browser=>{
-          const out=[];
-          for(const product of toRecheck){
-            if(signal.aborted)break;
-            const result=await recheckProduct(browser,product);
-            if(result)out.push({ok:!result.error,product,result,erro:result.error?new Error(result.error):null});
+        let recheckResults;
+        try {
+          recheckResults=await withMonitoringRead(()=>transport.run(async browser=>{
+            const out=[];
+            for(const product of toRecheck){
+              if(signal.aborted)break;
+              const result=await recheckProduct(browser,product);
+              if(result)out.push({ok:!result.error,product,result,erro:result.error?new Error(result.error):null});
+            }
+            return out;
+          }));
+        }catch(erro){
+          if(signal.aborted)break;
+          if(isCaptchaError(erro)&&onCaptcha){
+            recheckCaptchaTarget=toRecheck[0]??products.find(p=>p.type==='produto')??products[0];
+            break;
           }
-          return out;
-        }));
+          throw erro;
+        }
         if(signal.aborted)break;
         for(const {product,result} of recheckResults)onResult(product.id,result);
+        const recheckCaptchaItem=recheckResults.find(item=>!item.ok&&isCaptchaError(item.erro));
+        if(recheckCaptchaItem&&onCaptcha){
+          recheckCaptchaTarget=recheckCaptchaItem.product;
+          break;
+        }
+      }
+      if(recheckCaptchaTarget&&onCaptcha&&!signal.aborted){
+        clearPages();
+        await onCaptcha(recheckCaptchaTarget);
+        if(signal.aborted)break;
+        next=Date.now();
+        continue;
       }
       onCycle({ids:products.map(p=>p.id),ok:results.every(result=>result.ok)});
       next+=15_000;

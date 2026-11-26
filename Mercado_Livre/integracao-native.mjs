@@ -33,6 +33,8 @@ async function identidade() {
   return {userAgent:navigator.userAgent, platform:navigator.platform, languages:[...navigator.languages],
     userAgentData: await navigator.userAgentData.getHighEntropyValues(['architecture','bitness','model','platformVersion','fullVersionList','uaFullVersion','wow64'])};
 }
+const referenceCache = new Map();
+
 export async function iniciarIntegracao(options) {
   const server = createServer((req,res) => {
     if (req.url === '/worker.js') {res.setHeader('Content-Type','application/javascript');res.end(`const identidade=${identidade.toString()}; self.onmessage=async()=>self.postMessage(await identidade());`);return;}
@@ -43,13 +45,20 @@ export async function iniciarIntegracao(options) {
   let baseline;
   let browser;
   try {
-    console.log("[Integracao] Coletando referencia local...");
-    baseline = await puppeteer.launch({...options, protocolTimeout:15000});
-    const page = await baseline.newPage();
-    await page.goto(`http://127.0.0.1:${server.address().port}`);
-    const reference = {variant:'baseline', browserChoice:'chrome', browser:await baseline.version(), identityAudit:{page:await page.evaluate(identidade)}};
-    console.log("[Integracao] Referencia coletada; encerrando coleta...");
-    await baseline.close(); baseline = null;
+    const cacheKey = JSON.stringify([options?.executablePath ?? '', options?.headless ?? true]);
+    let reference = referenceCache.get(cacheKey);
+    if (!reference) {
+      console.log("[Integracao] Coletando referencia local...");
+      const {userDataDir: _ignoredUserDataDir, ...restOptions} = options ?? {};
+      const baselineArgs = (restOptions.args || []).filter(arg => !/^--(?:profile-directory|user-data-dir)(?:=|$)/i.test(String(arg)));
+      baseline = await puppeteer.launch({...restOptions, args: baselineArgs, protocolTimeout:15000});
+      const page = await baseline.newPage();
+      await page.goto(`http://127.0.0.1:${server.address().port}`);
+      reference = {variant:'baseline', browserChoice:'chrome', browser:await baseline.version(), identityAudit:{page:await page.evaluate(identidade)}};
+      referenceCache.set(cacheKey, reference);
+      console.log("[Integracao] Referencia coletada; encerrando coleta...");
+      await baseline.close().catch(() => {}); baseline = null;
+    }
     console.log("[Integracao] Iniciando versao integrada...");
     browser = await puppeteer.launch({...options, protocolTimeout:15000, nativeIdentity:{reference,browserChoice:'chrome'}});
     const probe = await browser.newPage();
@@ -64,14 +73,14 @@ export async function iniciarIntegracao(options) {
       w.postMessage('identity');
     }));
     if (worker.userAgent !== atual.userAgent || JSON.stringify(worker.userAgentData) !== JSON.stringify(atual.userAgentData)) throw new Error('Identidade divergente no worker local.');
-    await probe.close();
+    if (!probe.isClosed()) await probe.close().catch(() => {});
     console.log("[Integracao] Auditoria inicial aprovada.");
     return {browser, reference, auditoriaInicial:atual};
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
     throw error;
   } finally {
-    if (baseline) await baseline.close();
+    if (baseline) await baseline.close().catch(() => {});
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
   }

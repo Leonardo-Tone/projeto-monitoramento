@@ -191,23 +191,36 @@ export class MonitoringService {
   }
 
   async handleCaptcha(product) {
-    if (this.activeCaptcha || !product) return;
-    this.activeCaptcha = { productId: product.id, store: product.store, productName: product.name || product.title || product.code, startedAt: new Date().toISOString() };
+    if (this.activeCaptcha) return this.activeCaptcha.promise;
+    if (!product) return;
     const abort = new AbortController();
-    let resumeGate;
-    try {
-      resumeGate = await this.monitorGate.pause(abort.signal);
-      await this.captchaOpener({
-        projectRoot: this.projectRoot,
-        dataDirectory: this.dataDirectory,
-        product,
-        signal: abort.signal,
-        notify: notice => this.notify(notice)
-      });
-    } finally {
-      this.activeCaptcha = null;
-      resumeGate?.();
-    }
+    const state = {
+      productId: product.id,
+      store: product.store,
+      productName: product.name || product.title || product.code,
+      startedAt: new Date().toISOString(),
+      abort,
+      promise: null,
+    };
+    this.activeCaptcha = state;
+    const promise = (async () => {
+      let resumeGate;
+      try {
+        resumeGate = await this.monitorGate.pause(abort.signal);
+        await this.captchaOpener({
+          projectRoot: this.projectRoot,
+          dataDirectory: this.dataDirectory,
+          product,
+          signal: abort.signal,
+          notify: notice => this.notify(notice)
+        });
+      } finally {
+        if (this.activeCaptcha === state) this.activeCaptcha = null;
+        resumeGate?.();
+      }
+    })();
+    state.promise = promise;
+    return promise;
   }
 
   observe(id,result) {
@@ -351,11 +364,14 @@ export class MonitoringService {
 
   async stop() {
 
+    const captcha=this.activeCaptcha;
+    if(captcha)captcha.abort.abort();
+
     const jobs=[...this.jobs.entries()];
 
     for(const [store,job] of jobs){this.shops[store]={status:'stopping',message:'Aguardando a consulta em andamento…'};job.controller.abort();}
 
-    await Promise.allSettled([...jobs.map(([,job])=>job.promise),this.purchases.stop()]);await Promise.all([this.log.flush(),this.recoveryLog.flush()]);
+    await Promise.allSettled([...jobs.map(([,job])=>job.promise),captcha?.promise,this.purchases.stop()].filter(Boolean));await Promise.all([this.log.flush(),this.recoveryLog.flush()]);
 
     await this.save(this.registry);
 

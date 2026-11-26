@@ -410,7 +410,7 @@ async function consultarProduto(page, produto, {browser,signal}={}) {
         signal?.throwIfAborted();
         const navigationPage=await browser.newPage();
         try{return await consultarCatalogo(navigationPage,produto,{signal});}
-        finally{await navigationPage.close();}
+        finally{await navigationPage.close().catch(()=>{});}
     }
     return {
         ...resultado,

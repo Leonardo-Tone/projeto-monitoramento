@@ -42,7 +42,7 @@ async function launchNativeIdentity(puppeteer, options, configuration) {
       event.status = 'configured';
       return {retainSession: WORKERS.has(targetInfo.type)};
     } catch (error) {
-      if (session.detached || /Target closed|Session closed|No (?:target|session) with given id/i.test(error.message)) {
+      if (session.detached || /Target closed|Session closed|No (?:target|session) with given id|(?:Target|Session) with given id not found/i.test(error.message)) {
         event.status = 'cancelled'; event.error = error.message;
         sessions.delete(session.id());
         return {cancelled: true};
@@ -90,7 +90,7 @@ async function launchNativeIdentity(puppeteer, options, configuration) {
             sessions.delete(id);
             outcomes.push({type: item.type, released: true});
           } catch (error) {
-            if (item.session.detached || /Target closed|Session closed|No (?:target|session) with given id/i.test(error.message)) {
+            if (item.session.detached || /Target closed|Session closed|No (?:target|session) with given id|(?:Target|Session) with given id not found/i.test(error.message)) {
               sessions.delete(id);
               outcomes.push({type: item.type, released: true, alreadyClosed: true});
             } else outcomes.push({type: item.type, released: false, error: error.message});

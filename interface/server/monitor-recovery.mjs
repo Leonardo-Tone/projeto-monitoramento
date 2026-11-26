@@ -5,7 +5,7 @@ export function monitorFailure(error) {
   let kind = 'READ_ERROR';
   if (error?.blocking || [401, 403, 429, 503].includes(status) ||
       /captcha|login|verificaç[ãa]o|desafio|origem .*divergente/i.test(message)) kind = 'ACCESS';
-  else if (error?.code === 'BROWSER_DISCONNECTED' || /target closed|session closed|connection closed|browser disconnected/i.test(message)) kind = 'BROWSER_DISCONNECTED';
+  else if (error?.code === 'BROWSER_DISCONNECTED' || /target closed|session closed|connection closed|browser disconnected|session with given id not found|target with given id not found/i.test(message)) kind = 'BROWSER_DISCONNECTED';
   else if (/Runtime\.callFunctionOn timed out|Protocol error.*timed out|protocolTimeout/i.test(message)) kind = 'CHROME_TIMEOUT';
   else if (status) kind = 'HTTP';
   else if (networkCode || /failed to fetch|networkerror|load failed/i.test(message)) kind = 'NETWORK';

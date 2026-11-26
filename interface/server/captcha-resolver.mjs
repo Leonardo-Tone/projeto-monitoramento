@@ -101,7 +101,12 @@ export async function openProductCaptcha({
     const deadline = Date.now() + maxWaitMs;
     while (!signal?.aborted && Date.now() < deadline) {
       if (page.isClosed()) break;
-      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      await new Promise(resolve => {
+        if (signal?.aborted) return resolve();
+        const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); };
+        const timer = setTimeout(finish, pollIntervalMs);
+        signal?.addEventListener('abort', finish, { once: true });
+      });
       if (page.isClosed() || signal?.aborted || Date.now() >= deadline) break;
 
       try {

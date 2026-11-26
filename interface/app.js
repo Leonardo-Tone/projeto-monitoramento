@@ -584,8 +584,9 @@ function updateAuth() {
     const note = $('auth-gate-note');
     if (note) {
       note.textContent = auth.offlineExpired
-        ? 'Sua sessão offline expirou (mais de 7 dias sem conexão com o servidor VPS). Conecte-se para renovar.'
-        : (auth.vpsUrl ? `Servidor: ${auth.vpsUrl}` : '');
+        ? 'Sua sessão offline expirou (mais de 7 dias sem conexão). Conecte-se à internet para renovar.'
+        : '';
+      note.hidden = !note.textContent;
     }
     return;
   }
@@ -601,7 +602,7 @@ function updateAuth() {
           ? ' · sincronizando…'
           : '';
     emailEl.textContent = (auth.user?.email ?? '') + statusTag;
-    emailEl.title = auth.lastSyncError || (auth.lastSyncedAt ? `Última sincronização: ${formatTime(auth.lastSyncedAt)}` : 'Conectado ao servidor VPS');
+    emailEl.title = auth.lastSyncError || (auth.lastSyncedAt ? `Última sincronização: ${formatTime(auth.lastSyncedAt)}` : 'Conectado ao servidor');
   }
   const avatarEl = $('auth-user-avatar');
   if (avatarEl) {
@@ -673,7 +674,7 @@ function renderAdminAllowlist() {
       : `${filtered.length}/${adminEntries.length}`;
   }
   if (!adminEntries.length) {
-    list.innerHTML = `<div class="admin-empty">${state?.auth?.offlineMode ? 'Conecte-se à VPS para visualizar e gerenciar as contas autorizadas.' : 'Nenhum Gmail cadastrado.'}</div>`;
+    list.innerHTML = `<div class="admin-empty">${state?.auth?.offlineMode ? 'Conecte-se ao servidor para visualizar e gerenciar as contas autorizadas.' : 'Nenhum Gmail cadastrado.'}</div>`;
     return;
   }
   if (!filtered.length) {

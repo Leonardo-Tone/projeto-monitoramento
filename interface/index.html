@@ -93,13 +93,13 @@
         <div class="page-heading">
           <div>
             <h1 id="admin-view-title">Administração de acessos</h1>
-            <p>Gerencie os Gmails autorizados a entrar no Vigia e sincronizar produtos e configurações no servidor VPS.</p>
+            <p>Gerencie os Gmails autorizados a entrar no Vigia e sincronizar produtos e configurações no servidor.</p>
           </div>
           <button type="button" class="button secondary" id="admin-refresh"><span data-icon="refresh"></span>Atualizar lista</button>
         </div>
         <div id="admin-offline-notice" class="inline-notice admin-offline-notice" hidden>
           <span data-icon="info"></span>
-          <span>Você está em modo offline. A gestão de acessos exige conexão com o servidor VPS; as ações de alteração estão desabilitadas até reconectar.</span>
+          <span>Você está em modo offline. A gestão de acessos exige conexão com o servidor; as ações de alteração estão desabilitadas até reconectar.</span>
         </div>
         <dl class="admin-stats-grid" aria-label="Resumo de contas autorizadas">
           <div class="admin-stat-card"><dt>Contas autorizadas</dt><dd><strong id="admin-stat-total">00</strong></dd></div>
@@ -221,7 +221,7 @@
       <h2>Entre com sua conta Google</h2>
       <p>Use um Gmail autorizado para carregar seus produtos monitorados e preferências sincronizadas com o servidor.</p>
       <a id="auth-google-btn" class="button primary auth-google-btn" href="#">Entrar com Google</a>
-      <p id="auth-gate-note" class="auth-gate-note"></p>
+      <p id="auth-gate-note" class="auth-gate-note" hidden></p>
     </div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>

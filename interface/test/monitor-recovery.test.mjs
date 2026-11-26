@@ -193,3 +193,13 @@ test('restart cooldown allows a new browser restart after cooldown expires and w
   assert.equal(restarts, 2);
 });
 
+test('monitorFailure classifies Session/Target with given id not found as retryable BROWSER_DISCONNECTED', () => {
+  const sessionErr = monitorFailure(new Error('Protocol error (Target.closeTarget): Session with given id not found.'));
+  assert.equal(sessionErr.kind, 'BROWSER_DISCONNECTED');
+  assert.equal(sessionErr.retryable, true);
+
+  const targetErr = monitorFailure(new Error('Protocol error (Target.activateTarget): Target with given id not found.'));
+  assert.equal(targetErr.kind, 'BROWSER_DISCONNECTED');
+  assert.equal(targetErr.retryable, true);
+});
+
