@@ -82,12 +82,21 @@ const product = () => ({
   }],
 });
 
-test('Amazon settings migrate disabled and reject card; candidate respects limits and existing orders', () => {
+test('Amazon settings accept pix or credit_card with 4 digits and reject invalid methods; candidate respects confirmed object, limits and existing orders', () => {
   assert.equal(validateSettings({ ...defaults(), amazon: { onlyAmazon: false } }).amazon.purchase.enabled, false);
-  assert.throws(() => validateSettings({ ...settings, amazon: { onlyAmazon: false, purchase: { paymentMethod: 'credit_card', cardLastFour: '1234' } } }), /somente Pix/);
+  const withCard = validateSettings({ ...settings, amazon: { onlyAmazon: false, purchase: { enabled: true, paymentMethod: 'credit_card', cardLastFour: '2454' } } });
+  assert.equal(withCard.amazon.purchase.paymentMethod, 'credit_card');
+  assert.equal(withCard.amazon.purchase.cardLastFour, '2454');
+  assert.throws(() => validateSettings({ ...settings, amazon: { onlyAmazon: false, purchase: { paymentMethod: 'credit_card', cardLastFour: '12' } } }), /quatro últimos dígitos/);
+  assert.throws(() => validateSettings({ ...settings, amazon: { onlyAmazon: false, purchase: { paymentMethod: 'credit_card', cardLastFour: null } } }), /quatro últimos dígitos/);
+  assert.throws(() => validateSettings({ ...settings, amazon: { onlyAmazon: false, purchase: { paymentMethod: 'pix_with_discount', cardLastFour: '1234' } } }), /Pix ou cartão de crédito salvo/);
   const watched = product();
   const ids = new Set([watched.id]);
   assert.equal(amazonCandidates([watched], [], ids, settings.amazon).length, 1);
+  assert.equal(amazonCandidates([{ ...watched, availabilityNotification: { confirmed: { available: true, withinTarget: true }, pending: null, count: 2 } }], [], ids, settings.amazon).length, 1);
+  assert.equal(amazonCandidates([{ ...watched, availabilityNotification: { confirmed: { available: false, withinTarget: false }, pending: null, count: 2 } }], [], ids, settings.amazon).length, 0);
+  assert.equal(amazonCandidates([{ ...watched, availabilityNotification: { confirmed: true, pending: true, count: 2 } }], [], ids, settings.amazon).length, 1);
+  assert.equal(amazonCandidates([{ ...watched, availabilityNotification: { confirmed: false, pending: false, count: 2 } }], [], ids, settings.amazon).length, 0);
   assert.equal(amazonCandidates([{ ...watched, quantity: 2 }], [], ids, settings.amazon).length, 0);
   assert.equal(amazonCandidates([watched], [{ store: 'amazon', status: 'UNCERTAIN', items: [{ ...item, productId: 'old-id' }] }], ids, settings.amazon).length, 0);
 });
@@ -134,7 +143,22 @@ test('Pix clipboard hook captures the widget write while preserving the system c
   assert.equal(osClipboard, 'cópia manual');
 });
 
-function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer = false, paymentFlow, deliveryBlocked = false, existingAsin, paymentBaseline } = {}) {
+const cardReviewHtml = (lastFour = '2454', installmentsText = 'Em 1x de R$ 270,90 sem juros') =>
+  '<div id="selected-payment-methods-list-container"><h2 id="payment-option-text-default">Pagando com Mastercard ' + lastFour + '</h2></div>' +
+  '<div id="subtotals"><p>' + installmentsText + '</p></div>' +
+  '<span id="deliver-to-address-text">Endereço de teste</span><div class="rcx-checkout-delivery-option-a-control-row" data-isselected="true"><input type="radio" value="padrão" checked></div>' +
+  '<div class="lineitem-container"><p class="lineitem-seller-section">Vendido por <a href="/gp/help/seller/at-a-glance.html?seller=A1Z0XCS08FSLUJ">Midgard Toys</a></p>' +
+  '<fieldset name="checkout-quantity-stepper" data-steppervalue="1"><span class="a-stepper-value-live">1</span></fieldset></div>' +
+  '<span data-testid="Item_asin_0_0_0" class="aok-hidden">B0H3QKR97T</span>' +
+  summary('Itens:', 'ITEMS_TAX_INCLUSIVE', 'R$ 270,90') + summary('Frete:', 'SHIPPING_TAX_INCLUSIVE', 'R$ 0,00') +
+  summary('Total:', 'TOTAL_BEFORE_SPECIAL_PAYMENTS_TAX_INCLUSIVE', 'R$ 270,90') +
+  summary('Total do pedido:', '', 'R$ 270,90');
+
+function simulateBrowser({
+  loseAfterConfirm = false, cartReadError, directOffer = false, paymentFlow, deliveryBlocked = false,
+  existingAsin, paymentBaseline, pipFirst = false, cardReview = null, flowB = null,
+  thankYouOrderId = '701-1234567-1234567', thankYouError = false,
+} = {}) {
   const base = 'https://www.amazon.com.br';
   let cartAdded = false, finalClicks = 0;
   let activeTab;
@@ -146,11 +170,122 @@ function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer 
     const tab = Symbol('tab');
     const listeners = new Map();
     activeTab = tab;
-    let url, copied = false, checkoutView = paymentFlow === 'prime' ? 'payment-list' : paymentFlow ? 'card' : 'pix-review';
+    const postPipView = flowB
+      ? (flowB.startInPanel ? 'payment-list' : 'card')
+      : cardReview
+        ? 'card-review'
+        : paymentFlow === 'prime'
+          ? 'payment-list'
+          : paymentFlow
+            ? 'card'
+            : 'pix-review';
+    let url, copied = false, checkoutView = pipFirst ? 'pip' : postPipView;
     let keyboardUsed = false;
     let continueProbes = 0;
-    const selectPix = (viaKeyboard = false) => {
+    let cardInstallmentValue = flowB?.initialInstallment ?? '';
+    let installmentEvents = [];
+    const buildRadios = () => {
+      const makeRadio = ({ textContent, boxText, value, isPix, checked, installmentSelect }) => {
+        const rect = { left: 10, right: 26, top: 10, bottom: 26 };
+        const indicator = { getClientRects: () => [rect] };
+        const label = {
+          textContent, getClientRects: () => [{ left: 30, right: 70, top: 10, bottom: 26 }], querySelector: () => indicator,
+          scrollIntoView() {}, contains: hit => hit === label || hit === indicator,
+        };
+        const box = {
+          textContent: boxText ?? textContent,
+          querySelector: sel => {
+            if (sel.includes('installmentsSelection')) return installmentSelect ?? null;
+            return isPix;
+          },
+        };
+        const input = Object.assign(element(() => assert.fail('A seleção deve usar o mouse do Puppeteer.')), {
+          checked, value,
+          isConnected: true, matches: () => false, getClientRects: () => [{ left: 40, right: 50, top: 10, bottom: 26 }],
+          closest: target => target === 'label' ? label : target === '.pmts-instrument-box' ? box : null,
+          async focus() { this.focused = true; },
+          async press(key) { assert.equal(key, 'Space'); assert.equal(this.focused, true); selectTarget(true); },
+          async evaluate(callback) {
+            if (!flowB) assert.equal(isPix, true);
+            const inspect = runInNewContext('(' + callback.toString() + ')', {
+              innerWidth: 100, innerHeight: 100,
+              Event: class { constructor(type) { this.type = type; } },
+              document: { elementFromPoint: x => paymentFlow === 'keyboard' ? null : x === 18 ? indicator : label, activeElement: this.focused ? input : null },
+            });
+            return inspect(input);
+          },
+        });
+        return input;
+      };
+      if (flowB) {
+        const savedCard = flowB.savedCardLastFour ?? '2454';
+        const otherCard = flowB.otherCardLastFour ?? '9999';
+        const installmentSelect = {
+          options: [
+            { value: '', textContent: 'Preço à vista' },
+            { value: '2', textContent: 'Em 2x de R$ 135,45 sem juros' },
+          ],
+          get value() { return cardInstallmentValue; },
+          set value(next) { cardInstallmentValue = next; },
+          dispatchEvent(ev) { installmentEvents.push(ev.type); },
+        };
+        if (flowB.target === 'credit_card') {
+          return [
+            makeRadio({
+              textContent: 'Visa terminando em ' + otherCard,
+              boxText: 'Visa terminando em ' + otherCard,
+              value: 'instrumentId=card-other&isExpired=false&paymentMethod=CC',
+              isPix: false,
+              checked: checkoutView === 'payment-list',
+            }),
+            makeRadio({
+              textContent: 'Mastercard terminando em ' + savedCard,
+              boxText: 'Mastercard terminando em ' + savedCard + ' Preço à vista',
+              value: 'instrumentId=card-target&isExpired=false&paymentMethod=CC',
+              isPix: false,
+              checked: checkoutView === 'card-selected',
+              installmentSelect,
+            }),
+            makeRadio({
+              textContent: 'Pix',
+              boxText: 'Pix',
+              value: 'instrumentId=pix&isExpired=false&paymentMethod=Pix',
+              isPix: true,
+              checked: false,
+            }),
+          ];
+        }
+        return [
+          makeRadio({
+            textContent: 'Mastercard terminando em ' + savedCard,
+            boxText: 'Mastercard terminando em ' + savedCard,
+            value: 'instrumentId=card-saved&isExpired=false&paymentMethod=CC',
+            isPix: false,
+            checked: checkoutView === 'payment-list',
+          }),
+          makeRadio({
+            textContent: 'O código Pix gerado para o pagamento é válido por 30 minutos após a finalização do pedido.',
+            value: 'instrumentId=fixture&isExpired=false&paymentMethod=Pix',
+            isPix: true,
+            checked: checkoutView === 'pix-selected',
+          }),
+        ];
+      }
+      return [
+        makeRadio({ textContent: 'Cartão de crédito', value: 'paymentMethod=CreditCard', isPix: false, checked: checkoutView === 'payment-list' }),
+        makeRadio({
+          textContent: 'O código Pix gerado para o pagamento é válido por 30 minutos após a finalização do pedido.',
+          value: 'instrumentId=fixture&paymentMethod=Pix', isPix: true, checked: checkoutView === 'pix-selected',
+        }),
+      ];
+    };
+    const selectTarget = (viaKeyboard = false) => {
       keyboardUsed ||= viaKeyboard;
+      if (flowB?.target === 'credit_card') {
+        paymentActions.push('card');
+        checkoutView = 'card-selected';
+        return;
+      }
       paymentActions.push(viaKeyboard && paymentFlow === 'stalled' ? 'retry-pix' : 'pix');
       checkoutView = paymentFlow === 'auto' ? 'pix-review' : 'pix-selected';
     };
@@ -166,10 +301,29 @@ function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer 
           : '';
         return (cartAdded ? cartHtml : '<div id="sc-active-cart"></div>') + other;
       }
+      if (url.includes('/thankyou')) {
+        if (thankYouError) {
+          return '<div class="a-alert-error"><span>Pagamento recusado pelo emissor do cartão.</span></div>';
+        }
+        return '<div id="widget-purchaseSummary" class="a-alert-success"><h1>Pedido realizado, obrigado!</h1><span>Número do pedido: ' + thankYouOrderId + '</span></div>';
+      }
       if (url.includes('/checkout')) {
+        if (checkoutView === 'pip') {
+          return '<div id="prime-interstitial"><a id="prime-decline-button" href="/checkout/p/p-701-1234567-1234567/prime/handler?action=decline">Não, obrigado(a). Fechar pedido</a></div>';
+        }
         if (deliveryBlocked || (paymentFlow === 'trace' && checkoutView === 'pix-review')) return '<div data-messageid="NoDeliveryOptionAvailableForLineItemMessage"><span>Lamentamos, esse item não está disponível no seu endereço nesse momento.</span></div>';
-        const html = directOffer ? reviewHtml.replace('Midgard Toys', 'Amazon.com.br') : reviewHtml;
-        return checkoutView === 'pix-review' ? html : html.replace('Pagando com Pix', 'Cartão de crédito');
+        if (checkoutView === 'card-review') {
+          const lastFour = cardReview?.lastFour ?? flowB?.savedCardLastFour ?? '2454';
+          const installmentsText = cardReview?.installmentsText ?? 'Em 1x de R$ 270,90 sem juros';
+          const baseCard = cardReviewHtml(lastFour, installmentsText);
+          return directOffer ? baseCard.replace('Midgard Toys', 'Amazon.com.br') : baseCard;
+        }
+        const baseReview = directOffer ? reviewHtml.replace('Midgard Toys', 'Amazon.com.br') : reviewHtml;
+        if (checkoutView === 'pix-review') return baseReview;
+        if (flowB) {
+          return cardReviewHtml(flowB.target === 'credit_card' ? (flowB.otherCardLastFour ?? '9999') : (flowB.savedCardLastFour ?? '2454'));
+        }
+        return baseReview.replace('Pagando com Pix', 'Cartão de crédito');
       }
       if (url.includes('/payments-portal')) return pixHtml;
       return '';
@@ -180,12 +334,16 @@ function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer 
       mouse: { async click(x, y) {
         assert.equal(activeTab, tab);
         assert.deepEqual([x, y], [18, 18]);
-        if (paymentFlow === 'trace') {
+        if (paymentFlow === 'trace' || flowB?.hasPendingPost) {
           const request = { method: () => 'POST', url: () => base + '/checkout/p/p-private-id/pay/continue?token=private-query' };
           listeners.get('request')?.(request);
-          listeners.get('response')?.({ request: () => request, status: () => 200 });
+          if (flowB?.hasPendingPost) {
+            setTimeout(() => listeners.get('response')?.({ request: () => request, status: () => 200 }), 250);
+          } else {
+            listeners.get('response')?.({ request: () => request, status: () => 200 });
+          }
         }
-        selectPix();
+        selectTarget();
       } },
       async bringToFront() { activeTab = tab; },
       async goto(next) { url = next; return { status: () => 200 }; },
@@ -229,40 +387,22 @@ function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer 
         });
         if (selector.includes('proceedToRetailCheckout')) return element(() => {
           assert.equal(otherSelected, false);
-          url = base + '/checkout/spc';
+          url = pipFirst ? base + '/checkout/p/p-' + thankYouOrderId + '/pip' : base + '/checkout/spc';
         });
+        if (selector.includes('prime-decline-button') && checkoutView === 'pip') {
+          const labels = Array.isArray(args.label) ? args.label : [args.label];
+          assert.ok(labels.includes('Não, obrigado(a). Fechar pedido'));
+          return element(() => {
+            paymentActions.push('decline-pip');
+            checkoutView = postPipView;
+            url = base + '/checkout/p/p-' + thankYouOrderId + '/spc';
+          });
+        }
         if (selector.includes('checkout-change-payselect') && checkoutView === 'card') return element(() => {
           paymentActions.push('change'); checkoutView = 'payment-list';
         });
-        if (selector.includes('ppw-instrumentRowSelection') && ['payment-list', 'pix-selected'].includes(checkoutView)) {
-          const makeRadio = (textContent, pix, checked) => {
-            const rect = { left: 10, right: 26, top: 10, bottom: 26 };
-            const indicator = { getClientRects: () => [rect] };
-            const label = {
-              textContent, getClientRects: () => [{ left: 30, right: 70, top: 10, bottom: 26 }], querySelector: () => indicator,
-              scrollIntoView() {}, contains: hit => hit === label || hit === indicator,
-            };
-            const input = Object.assign(element(() => assert.fail('A seleção deve usar o mouse do Puppeteer.')), {
-              checked, value: pix ? 'instrumentId=fixture&paymentMethod=Pix' : 'paymentMethod=CreditCard',
-              isConnected: true, matches: () => false, getClientRects: () => [{ left: 40, right: 50, top: 10, bottom: 26 }],
-              closest: target => target === 'label' ? label : target === '.pmts-instrument-box' ? { querySelector: () => pix } : null,
-              async focus() { this.focused = true; },
-              async press(key) { assert.equal(key, 'Space'); assert.equal(this.focused, true); selectPix(true); },
-              async evaluate(callback) {
-                assert.equal(pix, true);
-                const inspect = runInNewContext('(' + callback.toString() + ')', {
-                  innerWidth: 100, innerHeight: 100,
-                  document: { elementFromPoint: x => paymentFlow === 'keyboard' ? null : x === 18 ? indicator : label, activeElement: this.focused ? input : null },
-                });
-                return inspect(input);
-              },
-            });
-            return input;
-          };
-          const radios = [
-            makeRadio('Cartão de crédito', false, checkoutView === 'payment-list'),
-            makeRadio('O código Pix gerado para o pagamento é válido por 30 minutos após a finalização do pedido.', true, checkoutView === 'pix-selected'),
-          ];
+        if (selector.includes('ppw-instrumentRowSelection') && ['payment-list', 'pix-selected', 'card-selected'].includes(checkoutView)) {
+          const radios = buildRadios();
           const locate = runInNewContext('(' + fn.toString() + ')', {
             document: { querySelectorAll: () => radios },
             getComputedStyle: () => ({ visibility: 'visible' }),
@@ -271,31 +411,55 @@ function simulateBrowser({ loseAfterConfirm = false, cartReadError, directOffer 
           return locate(args) ?? { asElement: () => null, async dispose() {} };
         }
         if (selector.includes(paymentFlow === 'stalled' ? 'secondary-continue-button' : 'bottom-continue-button') &&
-            checkoutView === 'pix-selected' && (paymentFlow !== 'stalled' || keyboardUsed)) {
+            ['pix-selected', 'card-selected'].includes(checkoutView) && (paymentFlow !== 'stalled' || keyboardUsed)) {
           continueProbes++;
           if (paymentFlow === 'stabilize' && continueProbes === 2) return { asElement: () => null, async dispose() {} };
           return element(() => {
             assert.match(selector, /checkout-(?:primary|secondary)-continue-payselect/);
             if (paymentFlow === 'stabilize') assert.ok(continueProbes >= 5, 'O botão deve permanecer habilitado após voltar a aparecer.');
             paymentActions.push('continue');
-            checkoutView = paymentFlow === 'prime' ? 'prime' : 'pix-review';
+            checkoutView = paymentFlow === 'prime'
+              ? 'prime'
+              : checkoutView === 'card-selected'
+                ? 'card-review'
+                : 'pix-review';
           });
         }
         if (selector.includes('action=decline') && checkoutView === 'prime') return element(() => {
           paymentActions.push('decline-prime');
-          checkoutView = 'pix-review';
+          checkoutView = flowB?.target === 'credit_card' ? 'card-review' : 'pix-review';
           url = base + '/checkout/p/order-test/spc';
         });
-        if (selector.includes('SPC_selectPlaceOrder') && checkoutView === 'pix-review') return element(() => {
-          assert.equal(stages.at(-1), 'FINALIZING');
-          finalClicks++;
-          if (loseAfterConfirm) throw new Error('O Chrome fechou após o clique');
-          url = base + '/payments-portal/pix';
-        });
+        if (selector.includes('SPC_selectPlaceOrder') && ['pix-review', 'card-review'].includes(checkoutView)) {
+          const expectedLabel = checkoutView === 'card-review'
+            ? 'Confirmar pedido com cartão ' + (cardReview?.lastFour ?? flowB?.savedCardLastFour ?? '2454')
+            : 'Confirmar pedido com Pix';
+          if (args.label && args.label !== expectedLabel) return { asElement: () => null, async dispose() {} };
+          return element(() => {
+            assert.equal(stages.at(-1), 'FINALIZING');
+            finalClicks++;
+            if (loseAfterConfirm) throw new Error('O Chrome fechou após o clique');
+            url = checkoutView === 'card-review'
+              ? base + '/checkout/p/p-' + thankYouOrderId + '/thankyou'
+              : base + '/payments-portal/pix';
+          });
+        }
         if (selector.includes('Upx-Prepare-PrimaryButton')) return element(() => { copied = true; });
         return { asElement: () => null, async dispose() {} };
       },
       async evaluate(fn, action) {
+        if (typeof action === 'string' && action.includes('ppw-instrumentRowSelection') && flowB &&
+            ['payment-list', 'pix-selected', 'card-selected'].includes(checkoutView)) {
+          const radios = buildRadios();
+          return runInNewContext(`(${fn})(radioSelector)`, {
+            document: { querySelectorAll: () => radios },
+            getComputedStyle: () => ({ visibility: 'visible' }),
+            radioSelector: action,
+          });
+        }
+        if (Array.isArray(action) && flowB) {
+          assert.fail('Fluxo B não deve esperar botões ficarem :disabled quando outro rádio já está marcado.');
+        }
         if (Array.isArray(action) && paymentBaseline) {
           assert.deepEqual(paymentActions, []);
           const [principalDisabled, lateralDisabled] = paymentBaseline.shift();
@@ -521,3 +685,162 @@ test('Amazon deselects unrelated cart items and refuses to duplicate an existing
   await assert.rejects(run(same), /evitar duplicidade/);
   assert.deepEqual(same.cartActions, []);
 });
+
+const cardSettings = () => {
+  const next = defaults();
+  next.amazon.purchase.enabled = true;
+  next.amazon.purchase.paymentMethod = 'credit_card';
+  next.amazon.purchase.cardLastFour = '2454';
+  return next;
+};
+
+test('Amazon Prime interstitial (/pip) declines a#prime-decline-button and proceeds to /spc', async () => {
+  const pipHtml = '<div id="prime-interstitial"><a id="prime-decline-button" href="/checkout/p/p-701-1234567-1234567/prime/handler?action=decline">Não, obrigado(a). Fechar pedido</a></div>';
+  assert.equal(parser.review(pipHtml).isPrimeInterstitial, true);
+  const browser = simulateBrowser({ pipFirst: true, cardReview: { lastFour: '2454', installmentsText: 'Em 1x de R$ 270,90 sem juros' } });
+  const result = await runAmazonPurchase({
+    ...browser, reviewOnly: true, order: { items: [item], payment: 'credit_card' }, settings: cardSettings(), projectRoot,
+  });
+  assert.equal(result.totalCents, 27090);
+  assert.deepEqual(browser.paymentActions, ['decline-pip']);
+  assert.equal(browser.finalClicks(), 0);
+});
+
+test('Amazon Flow B direct credit card validates 1x sem juros without opening change payment and reaches CARD_PAID on /thankyou', async () => {
+  const rules = cardSettings();
+  const browser = simulateBrowser({
+    pipFirst: true,
+    cardReview: { lastFour: '2454', installmentsText: 'Em 1x sem juros' },
+    thankYouOrderId: '702-9876543-1234567',
+  });
+  const watched = product();
+  const registry = { purchaseOrders: [] };
+  const manager = new PurchaseManager({
+    registry,
+    save: async () => {},
+    projectRoot,
+    getSettings: () => rules,
+    getProducts: () => [watched],
+    getExpectedStores: () => ['amazon'],
+    isPurchaseProfileOpen: () => false,
+    notify: async () => {},
+    verifyHistory: async ({ references }) => {
+      assert.ok(references.includes('702-9876543-1234567'));
+      return { status: 'VERIFIED', at: new Date().toISOString() };
+    },
+    amazonRunner: options => runAmazonPurchase({ ...options, ...browser }),
+  });
+  manager.resetCycles();
+  await manager.cycle('amazon', { ids: [watched.id] });
+  await manager.task;
+  assert.equal(registry.purchaseOrders[0].status, 'CARD_PAID');
+  assert.equal(registry.purchaseOrders[0].payment, 'credit_card');
+  assert.equal(registry.purchaseOrders[0].paid, true);
+  assert.equal(registry.purchaseOrders[0].totalCents, 27090);
+  assert.equal(registry.purchaseOrders[0].historyVerification.status, 'VERIFIED');
+  assert.deepEqual(browser.paymentActions, ['decline-pip']);
+  assert.equal(browser.finalClicks(), 1);
+
+  // Headless review-only mode (stopAtReview) validates card review without submitting
+  const reviewBrowser = simulateBrowser({ cardReview: { lastFour: '2454', installmentsText: 'Em 1x de R$ 270,90 sem juros' } });
+  await assert.rejects(runAmazonPurchase({
+    ...reviewBrowser, headlessMode: '1', order: { items: [item], payment: 'credit_card' }, settings: rules, projectRoot,
+  }), /revisão do pedido com cartão validada/);
+  assert.equal(reviewBrowser.finalClicks(), 0);
+});
+
+test('Amazon Flow B blocks credit card offers with installments > 1x, interest, mismatched last four, or /thankyou error', async () => {
+  const rules = cardSettings().amazon.purchase;
+  const okReview = parser.review(cardReviewHtml('2454', 'Em 1x de R$ 270,90 sem juros'));
+  assert.equal(okReview.cardLastFour, '2454');
+  assert.equal(okReview.installmentsOk, true);
+  assert.equal(validateAmazonReview(okReview, item, rules).totalCents, 27090);
+
+  const cashReview = parser.review(cardReviewHtml('2454', 'Preço à vista'));
+  assert.equal(cashReview.installmentsOk, true);
+  assert.equal(validateAmazonReview(cashReview, item, rules).totalCents, 27090);
+
+  for (const badInstallment of [
+    'Em 2x de R$ 135,45 sem juros',
+    'Em 10x de R$ 27,09 sem juros',
+    'Em 12x de R$ 25,00 com juros',
+    'Em 1x de R$ 270,90 com juros',
+  ]) {
+    const parsed = parser.review(cardReviewHtml('2454', badInstallment));
+    assert.equal(parsed.installmentsOk, false, 'Deve rejeitar: ' + badInstallment);
+    assert.throws(() => validateAmazonReview(parsed, item, rules), /Parcelamento não permitido/);
+  }
+  assert.throws(() => validateAmazonReview(parser.review(cardReviewHtml('9999', 'Em 1x sem juros')), item, rules), /Cartão de crédito divergente/);
+
+  const blockedBrowser = simulateBrowser({ cardReview: { lastFour: '2454', installmentsText: 'Em 3x de R$ 90,30 sem juros' } });
+  await assert.rejects(runAmazonPurchase({
+    ...blockedBrowser, order: { items: [item], payment: 'credit_card' }, settings: cardSettings(), projectRoot,
+  }), /Parcelamento não permitido/);
+  assert.equal(blockedBrowser.finalClicks(), 0);
+
+  const errorThankYou = parser.thankYou(
+    '<div class="a-alert-error"><span>Pagamento recusado</span></div>',
+    'https://www.amazon.com.br/checkout/p/p-701-1234567-1234567/thankyou',
+  );
+  assert.equal(errorThankYou.ready, false);
+  assert.equal(errorThankYou.error, true);
+});
+
+test('Amazon Flow B switches from pre-checked saved card to Pix without waiting for :disabled baseline', async () => {
+  const browser = simulateBrowser({
+    headlessMode: undefined,
+    pipFirst: true,
+    flowB: { target: 'pix', savedCardLastFour: '2454', hasPendingPost: true },
+  });
+  const result = await runAmazonPurchase({
+    ...browser, headlessMode: undefined, order: { items: [item], payment: 'pix' }, settings, projectRoot,
+    launcher: options => {
+      assert.equal(options.headless, true);
+      return browser.launcher(options);
+    },
+  });
+  assert.deepEqual(browser.paymentActions, ['decline-pip', 'change', 'pix', 'continue']);
+  assert.equal(browser.finalClicks(), 1);
+  assert.equal(result.payment, 'pix');
+  assert.equal(result.paid, false);
+  assert.equal(result.code, code);
+});
+
+test('Amazon Flow B switches from another card to target saved card, forces Preço à vista and finishes on /thankyou', async () => {
+  const browser = simulateBrowser({
+    flowB: { target: 'credit_card', savedCardLastFour: '2454', otherCardLastFour: '9999', initialInstallment: '2', hasPendingPost: true },
+    thankYouOrderId: '703-5555555-6666666',
+  });
+  const result = await runAmazonPurchase({
+    ...browser, headlessMode: undefined, order: { items: [item], payment: 'credit_card' }, settings: cardSettings(), projectRoot,
+    launcher: options => {
+      assert.equal(options.headless, true);
+      return browser.launcher(options);
+    },
+  });
+  assert.deepEqual(browser.paymentActions, ['change', 'card', 'continue']);
+  assert.equal(browser.finalClicks(), 1);
+  assert.equal(result.payment, 'credit_card');
+  assert.equal(result.paid, true);
+  assert.equal(result.totalCents, 27090);
+  assert.ok(result.orderReferences.includes('703-5555555-6666666'));
+});
+
+test('Amazon HTML redaction hides cardholder name, expiry date, and card last four digits', () => {
+  const sensitiveCardHtml =
+    '<div id="selected-payment-methods-list-container">' +
+    '<h2 id="payment-option-text-default">Pagando com Mastercard 2454</h2>' +
+    '</div>' +
+    '<div class="pmts-instrument-box">' +
+    '<span>Mastercard terminando em 2454</span>' +
+    '<span>JOAO DA SILVA</span>' +
+    '<span>Validade 08/2029</span>' +
+    '<input type="radio" name="ppw-instrumentRowSelection" value="instrumentId=secret&isExpired=false&paymentMethod=CC" checked>' +
+    '</div>' +
+    '<input data-testid="SPC_selectPlaceOrder" value="Confirmar pedido com cartão 2454">' +
+    '<a id="prime-decline-button" href="/checkout/p/p-701-1234567-1234567/prime/handler?action=decline">Não, obrigado(a). Fechar pedido</a>';
+  const redacted = redactAmazonHtml(sensitiveCardHtml, projectRoot);
+  assert.match(redacted, /Não, obrigado\(a\)\. Fechar pedido/);
+  assert.doesNotMatch(redacted, /2454|JOAO DA SILVA|08\/2029|Mastercard|701-1234567-1234567|secret/);
+});
+

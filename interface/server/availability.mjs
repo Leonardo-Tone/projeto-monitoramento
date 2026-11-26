@@ -10,7 +10,7 @@ export function validateSettings(input) {
   if(ml&&raw.requireLeader===undefined&&reputationMedals.includes(raw.minReputation)){ml.requireLeader=raw.requireReputation;ml.minLeader=raw.minReputation;ml.requireReputation=false;ml.minReputation='5_green';}
   if(!amazon||Object.keys(amazon).some(k=>!['onlyAmazon','purchase'].includes(k))||typeof amazon.onlyAmazon!=='boolean')throw new Error('Configuração Amazon inválida.');
   const amazonPurchase=validatePurchaseSettings(amazon.purchase);
-  if(amazonPurchase.paymentMethod!=='pix')throw new Error('A compra automática da Amazon aceita somente Pix.');
+  if(!['pix','credit_card'].includes(amazonPurchase.paymentMethod))throw new Error('A compra automática da Amazon aceita Pix ou cartão de crédito salvo.');
   if(!ml||Object.keys(ml).some(k=>!['requireReputation','minReputation','requireLeader','minLeader','matchMode','purchase'].includes(k))||typeof ml.requireReputation!=='boolean'||typeof ml.requireLeader!=='boolean'||!reputationLevels.includes(ml.minReputation)||!reputationMedals.includes(ml.minLeader)||!['all','any'].includes(ml.matchMode))throw new Error('Selecione critérios de reputação válidos.');
   return {amazon:{onlyAmazon:amazon.onlyAmazon,purchase:amazonPurchase},ml:{requireReputation:ml.requireReputation,minReputation:ml.minReputation,requireLeader:ml.requireLeader,minLeader:ml.minLeader,matchMode:ml.matchMode,purchase:validatePurchaseSettings(ml.purchase)}};
 }

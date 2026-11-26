@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { launchProfile } from './profiles.mjs';
 import { readAcrossNavigation } from './purchase-navigation.mjs';
 import { readPurchaseHtml } from './purchase-dom.mjs';
-import { amazonOrigin, cartLine, copyPix, createAmazonCheckoutParser, placePix, validateAmazonReview } from './amazon-checkout.mjs';
+import { amazonOrigin, cartLine, copyPix, createAmazonCheckoutParser, placeOrder, validateAmazonReview } from './amazon-checkout.mjs';
 import { captureAmazonPix, installAmazonPixCopy, validateAmazonPix } from './amazon-pix-copy.mjs';
 import { observeAmazonPaymentButtons, saveAmazonFailureHtml } from './amazon-diagnostics.mjs';
 import { checkoutOrderReferences } from './account-verification.mjs';
@@ -10,14 +10,14 @@ import { checkoutOrderReferences } from './account-verification.mjs';
 const categories = new Set(['AMAZON_DIRETA', 'TERCEIRO_ENVIO_AMAZON', 'TERCEIRO_ENVIO_PROPRIO']);
 const cartUrl = amazonOrigin + '/cart';
 const proceed = '#sc-buy-box-ptc-button input[name="proceedToRetailCheckout"]';
-const pixRadio = '#checkout-payment-option-panel input[type="radio"][name="ppw-instrumentRowSelection"]';
+const paymentRadio = '#checkout-payment-option-panel input[type="radio"][name="ppw-instrumentRowSelection"]';
 const changePayment = 'a[data-csa-c-slot-id="checkout-change-payselect"][aria-label="Alterar forma de pagamento"]';
 const continuePayment = '#checkout-primary-continue-button-id input[data-testid="bottom-continue-button"][data-csa-c-slot-id="checkout-primary-continue-payselect"]';
 const continuePaymentSidebar = '#checkout-secondary-continue-button-id input[data-testid="secondary-continue-button"][data-csa-c-slot-id="checkout-secondary-continue-payselect"]';
-const paymentStableMs = 400;
+const paymentStableMs = 600;
 const pixRetryDelayMs = 5000;
-const declinePrime = '#prime-decline-button a, a[href*="action=decline"]';
-const sameText = (left, right) => String(left ?? '').trim().replace(/\s+/g, ' ').toLowerCase() === String(right ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+const declinePrime = 'a#prime-decline-button, #prime-decline-button a, a[href*="action=decline"]';
+const declinePrimeLabels = ['Não, obrigado(a). Fechar pedido', 'Faça seu pedido sem os benefícios Prime'];
 
 export function amazonCandidates(products, orders, freshIds, settings, now = Date.now()) {
   const blockedOrders = orders.filter(order => !['CANCELLED', 'CLOSED'].includes(order.status));
@@ -29,8 +29,11 @@ export function amazonCandidates(products, orders, freshIds, settings, now = Dat
     const age = now - Date.parse(product.lastCheckedAt);
     const limitCents = Math.round(product.target * 100);
     const quantity = product.quantity ?? 1;
+    const confirmed = typeof product.availabilityNotification?.confirmed === 'boolean'
+      ? product.availabilityNotification.confirmed
+      : product.availabilityNotification?.confirmed?.available;
     if (product.store !== 'amazon' || !product.auto || product.available !== true || product.eligible === false ||
-        (product.availabilityNotification && product.availabilityNotification.confirmed !== true) ||
+        (product.availabilityNotification && confirmed !== true) ||
         product.error || !freshIds.has(product.id) || blocked.has(product.id) || blockedAsins.has(product.code) || !(age >= 0 && age < 90000) ||
         !Number.isSafeInteger(limitCents) || limitCents <= 0) continue;
     const offers = (product.amazonOffers ?? []).filter(offer => categories.has(offer.categoria) &&
@@ -56,26 +59,67 @@ function assertAmazonPage(page, paths) {
   if (paths && !paths.test(url.pathname)) throw new Error('A Amazon abriu uma etapa de compra desconhecida.');
 }
 
-async function enabledControl(page, selector, { label, radio, checked } = {}) {
-  const handle = await page.evaluateHandle(({ selector, label, radio, checked }) => {
+async function enabledControl(page, selector, { label, radio, cardLastFour, checked } = {}) {
+  const handle = await page.evaluateHandle(({ selector, label, radio, cardLastFour, checked }) => {
+    const labels = Array.isArray(label) ? label : label ? [label] : null;
     const elements = [...document.querySelectorAll(selector)].flatMap(el => {
       const displayed = radio ? (el.closest('label') ?? el.labels?.[0]) : el;
       if (!displayed?.getClientRects().length || getComputedStyle(displayed).visibility !== 'visible' ||
           el.closest('.a-button-disabled, [aria-disabled="true"], [hidden]') || el.matches(':disabled')) return [];
       if (radio) {
         const text = displayed.textContent.replace(/\s+/g, ' ').trim();
-        const method = new URLSearchParams(el.value).get('paymentMethod');
+        const params = new URLSearchParams(el.value);
+        const method = params.get('paymentMethod');
+        if (params.get('isExpired') === 'true') return [];
+        if (radio === 'credit_card') {
+          if (!cardLastFour || !/^CC$/i.test(method ?? '')) return [];
+          const box = el.closest('.pmts-instrument-box');
+          const boxText = (box?.textContent ?? text).replace(/\s+/g, ' ').trim();
+          const hasEnding = new RegExp('terminando em\\s+' + cardLastFour + '\\b', 'i').test(boxText);
+          return hasEnding && (!checked || el.checked) ? [el] : [];
+        }
         const pix = method !== null ? /^Pix$/i.test(method) : /^Pix$/i.test(text) ||
           Boolean(el.closest('.pmts-instrument-box')?.querySelector('.pmts-pix-text-content, .pmts-pix-icon-img'));
         return pix && (!checked || el.checked) ? [el] : [];
       }
-      return !label || (el.value || el.textContent).replace(/\s+/g, ' ').trim() === label ? [displayed] : [];
+      const actualLabel = (el.value || el.textContent).replace(/\s+/g, ' ').trim();
+      return !labels || labels.includes(actualLabel) ? [displayed] : [];
     });
     return elements.length === 1 ? elements[0] : null;
-  }, { selector, label, radio, checked });
+  }, { selector, label, radio, cardLastFour, checked });
   const element = handle.asElement();
   if (!element) await handle.dispose();
   return element;
+}
+
+async function hasCheckedPaymentRadio(page, selector) {
+  return Boolean(await page.evaluate(radioSelector =>
+    [...document.querySelectorAll(radioSelector)].some(el => {
+      const displayed = el.closest('label') ?? el.labels?.[0];
+      if (!displayed?.getClientRects().length || getComputedStyle(displayed).visibility !== 'visible' ||
+          el.closest('.a-button-disabled, [aria-disabled="true"], [hidden]') || el.matches(':disabled')) return false;
+      return Boolean(el.checked);
+    }), selector));
+}
+
+async function ensureCashInstallment(radio) {
+  return radio.evaluate(input => {
+    const box = input.closest('.pmts-instrument-box');
+    const select = box?.querySelector('select[name*="installmentsSelection"]');
+    if (!select) return { ok: true, changed: false };
+    const options = [...(select.options ?? [])];
+    const cashOption = options.find(opt =>
+      opt.value === '' || /^\s*Pre[çc]o\s+[àa]\s+vista\s*$/i.test(opt.textContent ?? '')
+    );
+    if (!cashOption) {
+      return { ok: false, reason: 'Opção Preço à vista não encontrada no seletor de parcelamento do cartão.' };
+    }
+    if (select.value === cashOption.value) return { ok: true, changed: false };
+    select.value = cashOption.value;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, changed: true };
+  });
 }
 
 async function findOffer(page, item) {
@@ -135,8 +179,11 @@ export async function runAmazonPurchase({
   const parser = createAmazonCheckoutParser(projectRoot);
   const item = order.items[0];
   const rules = settings.amazon.purchase;
+  const isCard = order.payment === 'credit_card';
+  const reviewRules = { ...rules, paymentMethod: order.payment };
+  const validPayment = order.payment === 'pix' || (isCard && /^\d{4}$/.test(rules?.cardLastFour ?? ''));
   if (order.items.length !== 1 || !/^[A-Z0-9]{10}$/.test(item?.itemId ?? '') ||
-      !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100 || order.payment !== 'pix') {
+      !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100 || !validPayment) {
     throw new Error('Tentativa de compra Amazon inválida.');
   }
   const { browser } = await launcher({ projectRoot, dataDirectory, store: 'amazon', purpose: 'purchase', headless });
@@ -190,7 +237,8 @@ export async function runAmazonPurchase({
     try { signal?.throwIfAborted(); await element.click(); }
     finally { await element.dispose().catch(() => {}); }
   };
-  const clickPix = async (page, radio, { keyboard = false } = {}) => {
+  const clickPaymentRadio = async (page, radio, { keyboard = false } = {}) => {
+    const labelKind = isCard ? 'Cartão' : 'Pix';
     try {
       signal?.throwIfAborted();
       const point = keyboard ? null : await radio.evaluate(input => {
@@ -198,7 +246,7 @@ export async function runAmazonPurchase({
         if (!label || !input.isConnected || input.disabled) return null;
         label.scrollIntoView({ block: 'center', inline: 'nearest' });
         const indicator = label.querySelector('.a-icon-radio');
-        for (const [target, kind] of [[indicator, 'círculo Pix'], [input, 'campo Pix'], [label, 'rótulo Pix']]) {
+        for (const [target, kind] of [[indicator, 'círculo'], [input, 'campo'], [label, 'rótulo']]) {
           if (!target) continue;
           for (const rect of target.getClientRects()) {
             const left = Math.max(0, rect.left), right = Math.min(innerWidth, rect.right);
@@ -213,17 +261,18 @@ export async function runAmazonPurchase({
       });
       signal?.throwIfAborted();
       if (point) {
-        paymentTrace.inputs.push(point.kind);
-        recordPayment('Puppeteer: clique no ' + point.kind);
+        const description = point.kind + ' ' + labelKind;
+        paymentTrace.inputs.push(description);
+        recordPayment('Puppeteer: clique no ' + description);
         await page.mouse.click(point.x, point.y);
       } else {
         await radio.focus();
         if (!await radio.evaluate(input => input === document.activeElement && !input.disabled)) {
-          throw new Error('O controle Pix da Amazon não aceitou foco para seleção.');
+          throw new Error('O controle ' + labelKind + ' da Amazon não aceitou foco para seleção.');
         }
         signal?.throwIfAborted();
-        paymentTrace.inputs.push('Espaço no campo Pix');
-        recordPayment('Puppeteer: Espaço no campo Pix');
+        paymentTrace.inputs.push('Espaço no campo ' + labelKind);
+        recordPayment('Puppeteer: Espaço no campo ' + labelKind);
         await radio.press('Space');
       }
     } finally { await radio.dispose().catch(() => {}); }
@@ -338,13 +387,18 @@ export async function runAmazonPurchase({
     if (!checkout) throw new Error('Botão Fechar pedido da Amazon indisponível.');
     await setStage('CHECKOUT', 'Abrindo o checkout da Amazon pelo carrinho.');
     await click(checkout);
-    let openedPayment = false, selectedPix = false, continued = false, declined = false, address;
-    let pixRetryAt = null, pixChecked = false, retriedCheckedPix = false, stablePayment;
+    const targetRadioType = isCard ? 'credit_card' : 'pix';
+    const finalButtonLabel = isCard ? 'Confirmar pedido com cartão ' + rules.cardLastFour : 'Confirmar pedido com Pix';
+    const paymentName = isCard ? 'cartão' : 'Pix';
+    let openedPayment = false, selectedMethod = false, continued = false, address;
+    const declinedUrls = new Set();
+    let retryAt = null, methodChecked = false, retriedCheckedMethod = false, stablePayment;
     let waitingForPaymentBaseline = false;
     const review = await wait(async () => {
       assertAmazonPage(page);
-      if (!checkoutPath.test(new URL(page.url()).pathname)) {
-        if (cartPath.test(new URL(page.url()).pathname)) return null;
+      const parsedUrl = new URL(page.url());
+      if (!checkoutPath.test(parsedUrl.pathname)) {
+        if (cartPath.test(parsedUrl.pathname)) return null;
         throw new Error('A Amazon abriu uma etapa desconhecida após o carrinho.');
       }
       const current = parser.review(await read(page, checkoutPath));
@@ -354,31 +408,66 @@ export async function runAmazonPurchase({
       }
       if (current.address && address && current.address !== address) throw new Error('O endereço da Amazon mudou durante a compra.');
       if (current.address) address = current.address;
-      const decline = !declined && (continued || current.pix)
-        ? await control(page, declinePrime, { label: 'Faça seu pedido sem os benefícios Prime' }) : null;
+      const declineKey = parsedUrl.origin + parsedUrl.pathname + (continued ? ':after' : ':before');
+      const decline = !declinedUrls.has(declineKey)
+        ? await control(page, declinePrime, { label: declinePrimeLabels }) : null;
       if (decline) {
         await setStage('CHECKOUT', 'Recusando a oferta Prime para continuar o checkout da Amazon.');
-        recordPayment('Puppeteer: clique em Faça seu pedido sem os benefícios Prime.');
-        declined = true; await click(decline); return null;
+        recordPayment('Puppeteer: clique para recusar a oferta Prime.');
+        declinedUrls.add(declineKey);
+        await click(decline);
+        return null;
       }
-      if (current.pix) {
-        const final = await control(page, placePix, { label: 'Confirmar pedido com Pix' });
+      const targetMatches = isCard
+        ? current.cardLastFour === rules.cardLastFour && current.installmentsOk === true
+        : current.pix === true;
+      if (targetMatches) {
+        const final = await control(page, placeOrder, { label: finalButtonLabel });
         if (final) {
           await final.dispose();
-          await setStage('CHECKOUT', 'Conferindo a revisão final do pedido Pix da Amazon.');
+          await setStage('CHECKOUT', isCard
+            ? 'Conferindo a revisão final do pedido com cartão da Amazon.'
+            : 'Conferindo a revisão final do pedido Pix da Amazon.');
+          return current;
+        }
+      }
+      if (isCard && current.cardLastFour === rules.cardLastFour && !current.installmentsOk && continued) {
+        const final = await control(page, placeOrder, { label: finalButtonLabel });
+        if (final) {
+          await final.dispose();
           return current;
         }
       }
       if (!continued) {
-        const selected = await control(page, pixRadio, { radio: true, checked: true });
-        paymentState = { pixChecked: Boolean(selected), continueEnabled: false, keyboardRetried: retriedCheckedPix };
+        const selected = await control(page, paymentRadio, {
+          radio: targetRadioType,
+          cardLastFour: isCard ? rules.cardLastFour : undefined,
+          checked: true,
+        });
+        paymentState = { pixChecked: Boolean(selected), continueEnabled: false, keyboardRetried: retriedCheckedMethod };
         const paymentPending = paymentTrace.requests.some(request => request.status === null && !request.failed);
         if (selected) {
-          if (stopAtReview && !selectedPix) {
+          if (stopAtReview && !isCard && !selectedMethod) {
             await selected.dispose();
             throw new Error('Teste headless inconclusivo: o Pix já estava marcado antes do clique do Puppeteer.');
           }
-          pixChecked = true;
+          methodChecked = true;
+          if (isCard) {
+            const installment = await readAcrossNavigation(page, () => ensureCashInstallment(selected), { signal }).catch(async error => {
+              await selected.dispose().catch(() => {});
+              throw error;
+            });
+            if (!installment.ok) {
+              await selected.dispose();
+              throw new Error(installment.reason);
+            }
+            if (installment.changed) {
+              stablePayment = null;
+              recordPayment('Puppeteer: selecionado Preço à vista no parcelamento do cartão.');
+              await selected.dispose();
+              return null;
+            }
+          }
           const primary = await control(page, continuePayment);
           const next = primary ?? await control(page, continuePaymentSidebar);
           paymentState.continueEnabled = Boolean(next);
@@ -399,7 +488,7 @@ export async function runAmazonPurchase({
               recordPayment('Vigia detectou o botão ' + button + ' habilitado.');
               await capturePaymentEvents(page);
             }
-            await setStage('CHECKOUT', 'Clicando em Use este método de pagamento após confirmar Pix.');
+            await setStage('CHECKOUT', 'Clicando em Use este método de pagamento após confirmar ' + paymentName + '.');
             continued = true;
             paymentPhase = 'clique em Use este método de pagamento';
             recordPayment('Puppeteer: clique em Use este método de pagamento.');
@@ -407,82 +496,128 @@ export async function runAmazonPurchase({
             return null;
           }
           stablePayment = null;
-          pixRetryAt ??= Date.now() + pixRetryDelayMs;
-          if (!paymentPending && !retriedCheckedPix && Date.now() >= pixRetryAt) {
-            retriedCheckedPix = true;
-            await setStage('CHECKOUT', 'Reaplicando Pix pelo teclado do Puppeteer porque o botão continua desabilitado.');
+          retryAt ??= Date.now() + pixRetryDelayMs;
+          if (!paymentPending && !retriedCheckedMethod && Date.now() >= retryAt) {
+            retriedCheckedMethod = true;
+            await setStage('CHECKOUT', 'Reaplicando ' + paymentName + ' pelo teclado do Puppeteer porque o botão continua desabilitado.');
             paymentState.keyboardRetried = true;
-            paymentPhase = 'nova ativação do Pix';
-            await clickPix(page, selected, { keyboard: true });
+            paymentPhase = isCard ? 'nova ativação do cartão' : 'nova ativação do Pix';
+            await clickPaymentRadio(page, selected, { keyboard: true });
           } else {
             await selected.dispose();
           }
           return null;
         }
         stablePayment = null;
-        const canSelect = !paymentPending && (!selectedPix || (!pixChecked && pixRetryAt !== null && Date.now() >= pixRetryAt));
-        const pix = canSelect ? await control(page, pixRadio, { radio: true }) : null;
-        if (pix) {
-          if (headless && !selectedPix) {
-            const ready = await readAcrossNavigation(page, () => page.evaluate(selectors => selectors.every(selector => {
-              const button = document.querySelector(selector);
-              return button?.matches(':disabled');
-            }), [continuePayment, continuePaymentSidebar]), { signal }).catch(async error => {
-              await pix.dispose().catch(() => {});
+        const canSelect = !paymentPending && (!selectedMethod || (!methodChecked && retryAt !== null && Date.now() >= retryAt));
+        const targetRadio = canSelect ? await control(page, paymentRadio, {
+          radio: targetRadioType,
+          cardLastFour: isCard ? rules.cardLastFour : undefined,
+        }) : null;
+        if (targetRadio) {
+          if (!selectedMethod) {
+            const otherChecked = await readAcrossNavigation(page, () => hasCheckedPaymentRadio(page, paymentRadio), { signal }).catch(async error => {
+              await targetRadio.dispose().catch(() => {});
               throw error;
             });
-            if (!ready) {
-              await pix.dispose();
-              if (!waitingForPaymentBaseline) {
-                waitingForPaymentBaseline = true;
-                const message = 'Aguardando os botões principal e lateral ficarem desabilitados antes de clicar no Pix.';
-                recordPayment(message);
-                await setStage('CHECKOUT', message);
+            if (otherChecked) {
+              recordPayment('Fluxo B detectado: outro método já estava marcado; selecionando ' + paymentName + ' diretamente.');
+            } else if (headless) {
+              const ready = await readAcrossNavigation(page, () => page.evaluate(selectors => selectors.every(selector => {
+                const button = document.querySelector(selector);
+                return button?.matches(':disabled');
+              }), [continuePayment, continuePaymentSidebar]), { signal }).catch(async error => {
+                await targetRadio.dispose().catch(() => {});
+                throw error;
+              });
+              if (!ready) {
+                await targetRadio.dispose();
+                if (!waitingForPaymentBaseline) {
+                  waitingForPaymentBaseline = true;
+                  const message = 'Aguardando os botões principal e lateral ficarem desabilitados antes de clicar no ' + paymentName + '.';
+                  recordPayment(message);
+                  await setStage('CHECKOUT', message);
+                }
+                return null;
               }
-              return null;
+              recordPayment('Estado inicial confirmado: botões principal e lateral desabilitados.');
             }
-            recordPayment('Estado inicial confirmado: botões principal e lateral desabilitados.');
           }
-          await setStage('CHECKOUT', 'Acionando o rádio Pix pelo Puppeteer.');
-          pixRetryAt = selectedPix ? null : Date.now() + pixRetryDelayMs;
-          paymentPhase = selectedPix ? 'nova ativação do Pix' : 'seleção do Pix';
-          selectedPix = true;
-          await clickPix(page, pix);
+          await setStage('CHECKOUT', 'Acionando o rádio ' + paymentName + ' pelo Puppeteer.');
+          retryAt = selectedMethod ? null : Date.now() + pixRetryDelayMs;
+          paymentPhase = selectedMethod
+            ? (isCard ? 'nova ativação do cartão' : 'nova ativação do Pix')
+            : (isCard ? 'seleção do cartão' : 'seleção do Pix');
+          selectedMethod = true;
+          await clickPaymentRadio(page, targetRadio);
           return null;
         }
       }
-      if (!current.pix && !openedPayment && !continued) {
+      if (!targetMatches && !openedPayment && !continued) {
         const change = await control(page, changePayment);
         if (change) {
           await setStage('CHECKOUT', 'Abrindo Alterar forma de pagamento na Amazon.');
-          openedPayment = true; await click(change);
+          openedPayment = true;
+          await click(change);
+          return null;
+        }
+        if (isCard && current.cardLastFour === rules.cardLastFour && !current.installmentsOk) {
+          const final = await control(page, placeOrder, { label: finalButtonLabel });
+          if (final) {
+            await final.dispose();
+            return current;
+          }
         }
       }
       return null;
     }, () => {
-      if (waitingForPaymentBaseline && !selectedPix) return 'Os botões de avanço da Amazon não ficaram desabilitados antes da seleção do Pix.';
-      if (selectedPix && !pixChecked) return 'A Amazon não confirmou que a opção Pix ficou marcada.';
-      if (pixChecked && !continued) return 'Pix selecionado, mas a Amazon não habilitou Use este método de pagamento.';
-      return 'A revisão Pix da Amazon não carregou. Confira endereço, pagamento e login no perfil Compra.';
+      if (waitingForPaymentBaseline && !selectedMethod) return 'Os botões de avanço da Amazon não ficaram desabilitados antes da seleção do ' + paymentName + '.';
+      if (selectedMethod && !methodChecked) return 'A Amazon não confirmou que a opção ' + paymentName + ' ficou marcada.';
+      if (methodChecked && !continued) return (isCard ? 'Cartão' : 'Pix') + ' selecionado, mas a Amazon não habilitou Use este método de pagamento.';
+      return 'A revisão ' + (isCard ? 'com cartão' : 'Pix') + ' da Amazon não carregou. Confira endereço, pagamento e login no perfil Compra.';
     }, 25000);
-    const economics = validateAmazonReview(review, item, rules);
+    const economics = validateAmazonReview(review, item, reviewRules);
     if (stopAtReview) {
-      const message = 'Teste headless concluído: revisão do pedido Pix validada. Pedido não confirmado.';
+      const message = isCard
+        ? 'Teste headless concluído: revisão do pedido com cartão validada. Pedido não confirmado.'
+        : 'Teste headless concluído: revisão do pedido Pix validada. Pedido não confirmado.';
       paymentTrace.reviewValidated = true;
       recordPayment(message);
       await setStage('CHECKOUT', message);
       throw new Error(message);
     }
     if (reviewOnly) return { ...economics, reviewOnly: true };
-    const finalButton = await control(page, placePix, { label: 'Confirmar pedido com Pix' });
-    if (!finalButton) throw new Error('Confirmação Pix indisponível na revisão da Amazon.');
-    await setStage('FINALIZING', 'Confirmando o pedido Pix da Amazon uma única vez.', { ...economics, items: [item] });
+    const finalButton = await control(page, placeOrder, { label: finalButtonLabel });
+    if (!finalButton) {
+      throw new Error(isCard
+        ? 'Confirmação do pedido com cartão indisponível na revisão da Amazon.'
+        : 'Confirmação Pix indisponível na revisão da Amazon.');
+    }
+    await setStage(
+      'FINALIZING',
+      isCard ? 'Confirmando o pedido com cartão da Amazon uma única vez.' : 'Confirmando o pedido Pix da Amazon uma única vez.',
+      { ...economics, items: [item] },
+    );
     const lastReview = parser.review(await read(page, checkoutPath));
-    validateAmazonReview(lastReview, item, rules);
+    validateAmazonReview(lastReview, item, reviewRules);
     if (JSON.stringify(lastReview) !== JSON.stringify(review)) throw new Error('A revisão da Amazon mudou antes da confirmação.');
     const reviewUrl = page.url();
-    recordPayment('Puppeteer: clique em Confirmar pedido com Pix.');
+    recordPayment(isCard ? 'Puppeteer: clique em Confirmar pedido com cartão.' : 'Puppeteer: clique em Confirmar pedido com Pix.');
     await click(finalButton);
+    if (isCard) {
+      const thankYou = await wait(async () => {
+        const html = await read(page);
+        const confirmation = parser.thankYou(html, page.url());
+        if (confirmation.error) throw new Error('A Amazon informou erro ou recusa no pagamento com cartão.');
+        return confirmation.ready ? confirmation : null;
+      }, 'A Amazon não exibiu a confirmação do pedido após o clique com cartão.', 25000);
+      const urlRefs = checkoutOrderReferences({ store: 'amazon', urls: [page.url(), popup?.url(), reviewUrl].filter(Boolean) });
+      result = {
+        ...economics, items: [item], payment: 'credit_card', paid: true,
+        orderReferences: [...new Set([...urlRefs, ...(thankYou.orderIds ?? [])])],
+      };
+      return result;
+    }
     const pix = await wait(async () => {
       const payment = parser.pix(await read(page));
       if (!payment.ready) return null;

@@ -2,7 +2,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 export const amazonOrigin = 'https://www.amazon.com.br';
-export const placePix = '#submitOrderButtonId input[data-testid="SPC_selectPlaceOrder"]';
+export const placeOrder = '#submitOrderButtonId input[data-testid="SPC_selectPlaceOrder"]';
+export const placePix = placeOrder;
 export const copyPix = '[data-testid="Upx-Prepare-PrimaryButton"] button';
 export const cartLine = '.sc-list-item[data-asin][data-itemid]';
 
@@ -68,6 +69,21 @@ export function createAmazonCheckoutParser(projectRoot) {
       const sellerLine = item.find('.lineitem-seller-section');
       const sellerText = clean(sellerLine.text()).replace(/^Vendido por\s*/i, '');
       const payment = visible($('#selected-payment-methods-list-container [id^="payment-option-text-"]'));
+      const paymentText = clean(payment.text());
+      const cardMatch = payment.length === 1 ? paymentText.match(/^Pagando com .+\b(\d{4})$/i) : null;
+      const cardLastFour = cardMatch ? cardMatch[1] : null;
+      const visibleText = nodes => clean(nodes.toArray().map(el => {
+        const clone = $(el).clone();
+        clone.find('[hidden], .aok-hidden, .a-hidden').remove();
+        return clone.text();
+      }).join(' '));
+      const subtotalsText = visibleText(visible($('#subtotals, #subtotals-marketplace-tango-bottom')));
+      const hasInterest = /\bcom juros\b/i.test(subtotalsText);
+      const hasMultiInstallments = /\b(?:Em\s+)?(?!1x\b)\d+x\b/i.test(subtotalsText);
+      const hasSingleInstallment = /\bEm\s+1x\b/i.test(subtotalsText) && /\bsem juros\b/i.test(subtotalsText);
+      const hasCashPrice = /\bPre[çc]o\s+[àa]\s+vista\b/i.test(subtotalsText);
+      const hasAnyInstallmentText = /\b\d+x\b|parcela|juros/i.test(subtotalsText);
+      const installmentsOk = !hasInterest && !hasMultiInstallments && (hasSingleInstallment || hasCashPrice || !hasAnyInstallmentText);
       const address = clean(visible($('#deliver-to-address-text')).text());
       const selectedDelivery = visible($('.rcx-checkout-delivery-option-a-control-row[data-isselected="true"] input[type="radio"][checked]'));
       const amounts = [];
@@ -97,10 +113,14 @@ export function createAmazonCheckoutParser(projectRoot) {
       };
       return {
         deliveryBlocker,
+        isPrimeInterstitial: visible($('a#prime-decline-button')).length > 0,
         lineCount: rows.length, asin: asinFields.length === 1 ? clean(asinFields.text()) : null,
         quantity: provedQuantity.length === 1 ? provedQuantity[0] : null,
         seller: sellerText, ...seller(sellerLine, 'a[href*="seller="]'),
-        pix: payment.length === 1 && /^(?:Pagando com )?Pix$/i.test(clean(payment.text())),
+        paymentText,
+        pix: payment.length === 1 && /^(?:Pagando com )?Pix$/i.test(paymentText),
+        cardLastFour,
+        installmentsOk,
         address, delivery: selectedDelivery.length === 1 ? selectedDelivery.val() : null,
         subtotalCents: amount(row => row.type === 'ITEMS_TAX_INCLUSIVE'),
         grossShipping: amount(row => row.type === 'SHIPPING_TAX_INCLUSIVE'),
@@ -119,6 +139,30 @@ export function createAmazonCheckoutParser(projectRoot) {
         .filter(value => /^Total a pagar:/i.test(value));
       return { ready: qr.length === 1 && $(copyPix).length === 1, totalCents: total.length === 1 ? cents(total[0]) : null };
     },
+
+    thankYou(html, url) {
+      let isThankYouUrl = false;
+      try {
+        const parsed = new URL(url);
+        isThankYouUrl = parsed.origin === amazonOrigin &&
+          /^\/(?:checkout(?:\/p\/[^/]+)?\/thankyou|gp\/buy\/thankyou)(?:\/|$)/i.test(parsed.pathname);
+      } catch {
+        isThankYouUrl = false;
+      }
+      const $ = load(html);
+      const visible = nodes => nodes.filter((_, el) => !$(el).closest('[hidden], .aok-hidden, .a-hidden').length);
+      const root = $('body').length ? $('body').clone() : $.root().clone();
+      root.find('script, style, template, [hidden], .aok-hidden, .a-hidden').remove();
+      const bodyText = clean(root.text());
+      const errorAlerts = visible($('.a-alert-error, .pmts-error-message'));
+      const hasErrorAlert = errorAlerts.toArray().some(el => clean($(el).text()).length > 0);
+      const hasErrorText = /(?:pagamento recusado|cart[ãa]o recusado|n[ãa]o foi poss[íi]vel processar (?:o|seu) pagamento|problema com (?:o|seu) pagamento|revise seu m[ée]todo de pagamento|precisa de a[çc][ãa]o)/i.test(bodyText);
+      const error = hasErrorAlert || hasErrorText;
+      const confirmed = visible($('#widget-purchaseSummary, .a-alert-success')).length > 0 ||
+        /\b(?:Pedido realizado|Obrigado)\b/i.test(bodyText);
+      const orderIds = [...new Set(String(html ?? '').match(/\b70\d-\d{7}-\d{7}\b/g) ?? [])];
+      return { ready: isThankYouUrl && confirmed && !error, confirmed, error, orderIds };
+    },
   };
 }
 
@@ -128,7 +172,23 @@ export function validateAmazonReview(review, item, rules) {
       review.sellerConflict || !sellerMatches(review, item)) {
     throw new Error('ASIN, vendedor ou quantidade divergente na revisão da Amazon.');
   }
-  if (!review.pix || !review.address || !review.delivery) throw new Error('Pix, endereço ou entrega não confirmados na revisão da Amazon.');
+  const paymentMethod = rules?.paymentMethod ?? 'pix';
+  if (!['pix', 'credit_card'].includes(paymentMethod)) {
+    throw new Error('Forma de pagamento não suportada na revisão da Amazon.');
+  }
+  if (paymentMethod === 'credit_card') {
+    if (!rules?.cardLastFour || review.cardLastFour !== rules.cardLastFour) {
+      throw new Error('Cartão de crédito divergente ou não confirmado na revisão da Amazon.');
+    }
+    if (review.installmentsOk !== true) {
+      throw new Error('Parcelamento não permitido na revisão da Amazon: somente pagamento à vista (1x sem juros) é aceito.');
+    }
+    if (!review.address || !review.delivery) {
+      throw new Error('Endereço ou entrega não confirmados na revisão da Amazon.');
+    }
+  } else if (!review.pix || !review.address || !review.delivery) {
+    throw new Error('Pix, endereço ou entrega não confirmados na revisão da Amazon.');
+  }
   const { subtotalCents, grossShipping, beforeDiscountCents, shippingDiscount, pixDiscountCents, totalCents } = review;
   if (review.unknownAdjustments || ![subtotalCents, grossShipping, beforeDiscountCents, shippingDiscount, pixDiscountCents, totalCents].every(Number.isSafeInteger) ||
       subtotalCents !== item.unitCents * item.quantity || shippingDiscount > grossShipping ||

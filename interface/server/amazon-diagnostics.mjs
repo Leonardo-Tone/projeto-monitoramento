@@ -8,7 +8,7 @@ import { amazonOrigin } from './amazon-checkout.mjs';
 const escape = value => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 })[character]);
-const visibleLabels = /^(?:Pix|Pagando com Pix|Cartão de crédito|Método de pagamento|Alterar forma de pagamento|Selecionar endereço de entrega|Carregando (?:suas informações de pagamento|informações de entrega)(?:\.{3}|…)?|Continuar|Fechar pedido|Confirmar pedido com Pix|Faça seu pedido sem os benefícios Prime|Total do pedido:?|Frete:?|Itens:?|Total a pagar:?|Copiar código|Lamentamos, esse item não está disponível no seu endereço nesse momento\. Você pode remover ou substituir este item, ou alterar o endereço para continuar\.)$/i;
+const visibleLabels = /^(?:Pix|Pagando com Pix|Cartão de crédito|Método de pagamento|Alterar forma de pagamento|Selecionar endereço de entrega|Carregando (?:suas informações de pagamento|informações de entrega)(?:\.{3}|…)?|Continuar|Fechar pedido|Confirmar pedido com Pix|Não, obrigado\(a\)\. Fechar pedido|Faça seu pedido sem os benefícios Prime|Total do pedido:?|Frete:?|Itens:?|Total a pagar:?|Copiar código|Lamentamos, esse item não está disponível no seu endereço nesse momento\. Você pode remover ou substituir este item, ou alterar o endereço para continuar\.)$/i;
 const retainedAttributes = ['id', 'class', 'role', 'type', 'name', 'data-testid', 'data-messageid', 'aria-disabled', 'aria-expanded', 'aria-hidden'];
 const structuralToken = /^[a-zA-Z][a-zA-Z_-]{0,85}$/;
 const price = /^-?R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}$/;
@@ -64,7 +64,7 @@ function routeOf(value) {
     const path = url.pathname;
     if (/^\/(?:cart|gp\/cart)(?:\/|$)/.test(path)) return '/cart';
     if (/^\/(?:dp|gp\/product)\//.test(path)) return '/dp/:asin';
-    const checkout = path.match(/^\/checkout(?:\/p\/[^/]+)?(?:\/(entry|spc|pay|shipaddressselect|itemselect|review|thankyou))?(?:\/|$)/);
+    const checkout = path.match(/^\/checkout(?:\/p\/[^/]+)?(?:\/(entry|pip|spc|pay|shipaddressselect|itemselect|review|thankyou))?(?:\/|$)/);
     if (checkout) return '/checkout' + (checkout[1] ? '/' + checkout[1] : '');
     if (/^\/(?:payments-portal|cpe)(?:\/|$)/.test(path)) return 'Portal de pagamento Amazon';
     if (/^\/ap(?:\/|$)/.test(path)) return 'Login Amazon';

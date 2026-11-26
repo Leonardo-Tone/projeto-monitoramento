@@ -98,7 +98,7 @@ function artwork(type) {
 }
 function productEditLocked(){return Boolean(state?.purchases?.busy);}
 function isLocked(){return monitoring||Boolean(state?.purchases?.busy);}
-const amazonPurchaseFields=['enabled','free-shipping','max-shipping','include-shipping'].map(field=>'amazon-purchase-'+field);
+const amazonPurchaseFields=['enabled','payment-method','card-last-four','free-shipping','max-shipping','include-shipping'].map(field=>'amazon-purchase-'+field);
 function switchControl(p, key, label, icon) {
   return `<label class="control-label">${svg(icon)}${escapeHtml(label)}<span class="switch"><input type="checkbox" data-action="${key}" data-id="${escapeHtml(p.id)}" aria-label="${escapeHtml(label+' para '+displayName(p))}" ${p[key]?'checked':''} ${productEditLocked()?'disabled':''}><span class="switch-track"></span></span></label>`;
 }
@@ -287,6 +287,9 @@ function loadSettingsForm(){
   const rules=state?.settings;$('amazon-only').checked=rules?.amazon.onlyAmazon??false;
   const amazonPurchase=rules?.amazon.purchase??{};
   $('amazon-purchase-enabled').checked=amazonPurchase.enabled??false;
+  $('amazon-purchase-payment-method').value=amazonPurchase.paymentMethod??'pix';
+  $('amazon-purchase-card-last-four').value=amazonPurchase.cardLastFour??'';
+  updateAmazonCardField();
   $('amazon-purchase-free-shipping').checked=amazonPurchase.freeShippingOnly??false;
   $('amazon-purchase-max-shipping').value=amazonPurchase.maxShippingCents==null?'':money.format(amazonPurchase.maxShippingCents/100);
   $('amazon-purchase-include-shipping').checked=amazonPurchase.includeShipping??false;
@@ -319,6 +322,8 @@ document.querySelectorAll('.settings-tabs').forEach(tablist=>{
 });
 $('ml-reputation-required').addEventListener('change',updateStats);
 $('ml-leader-required').addEventListener('change',updateStats);
+function updateAmazonCardField(){$('amazon-purchase-card-field').hidden=$('amazon-purchase-payment-method').value==='pix';}
+$('amazon-purchase-payment-method').addEventListener('change',updateAmazonCardField);
 function updateCardField(){$('purchase-card-field').hidden=$('purchase-payment-method').value==='pix';}
 $('purchase-payment-method').addEventListener('change',updateCardField);
 function readFreight(id){
@@ -328,9 +333,13 @@ function readFreight(id){
 $('save-settings').addEventListener('click',async()=>{
   const maxShipping=readFreight('purchase-max-shipping');
   const amazonMaxShipping=readFreight('amazon-purchase-max-shipping');
+  const amazonPaymentMethod=$('amazon-purchase-payment-method').value;
+  const amazonCardLastFour=amazonPaymentMethod==='pix'?null:$('amazon-purchase-card-last-four').value.trim();
   const paymentMethod=$('purchase-payment-method').value;
   const cardLastFour=paymentMethod==='pix'?null:$('purchase-card-last-four').value.trim();
-  const invalidField=Number.isNaN(amazonMaxShipping)?$('amazon-purchase-max-shipping'):Number.isNaN(maxShipping)?$('purchase-max-shipping'):
+  const invalidField=Number.isNaN(amazonMaxShipping)?$('amazon-purchase-max-shipping'):
+    amazonCardLastFour!==null&&!/^\d{4}$/.test(amazonCardLastFour)?$('amazon-purchase-card-last-four'):
+    Number.isNaN(maxShipping)?$('purchase-max-shipping'):
     cardLastFour!==null&&!/^\d{4}$/.test(cardLastFour)?$('purchase-card-last-four'):null;
   if(invalidField){
     const shop=invalidField.id.startsWith('amazon-')?'amazon':'ml';
@@ -347,6 +356,8 @@ $('save-settings').addEventListener('click',async()=>{
     await action('settings','PATCH',{
       amazon:{onlyAmazon:$('amazon-only').checked,purchase:{
         enabled:$('amazon-purchase-enabled').checked,
+        paymentMethod:amazonPaymentMethod,
+        cardLastFour:amazonCardLastFour,
         freeShippingOnly:$('amazon-purchase-free-shipping').checked,
         maxShippingCents:amazonMaxShipping===null?null:Math.round(amazonMaxShipping*100),
         includeShipping:$('amazon-purchase-include-shipping').checked,
