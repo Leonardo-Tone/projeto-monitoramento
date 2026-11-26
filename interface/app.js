@@ -561,10 +561,17 @@ function renderAdminAllowlist(entries) {
   `).join('');
 }
 
-$('auth-logout')?.addEventListener('click', async () => {
-  if (!window.confirm('Deseja sair da sua conta Google no Vigia?')) return;
+$('auth-logout')?.addEventListener('click', () => {
+  const email = state?.auth?.user?.email;
+  const msg = $('logout-message');
+  if (msg) msg.textContent = email ? `Deseja encerrar a sessão de ${email}?` : 'Deseja encerrar sua sessão no Vigia?';
+  $('logout-dialog')?.showModal();
+});
+
+$('confirm-logout')?.addEventListener('click', async () => {
   try {
     await action('auth/logout', 'POST', {});
+    $('logout-dialog')?.close();
     toast('Sessão encerrada.');
   } catch (err) {
     toast(err.message);
