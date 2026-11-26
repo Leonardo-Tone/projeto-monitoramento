@@ -80,7 +80,8 @@ export async function openProductCaptcha({
   });
 
   try {
-    const page = await browser.newPage();
+    const existingPages = typeof browser.pages === 'function' ? await browser.pages().catch(() => []) : [];
+    const page = existingPages.find(p => !p.isClosed?.()) ?? await browser.newPage();
     const targetUrl = product.url;
 
     // 3. Navega diretamente para o produto que gerou o captcha

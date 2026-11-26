@@ -14,11 +14,28 @@ export function chromeProfile(projectRoot,dataDirectory,store,purpose) {
     :join(dataDirectory,'chrome-profiles','purchase');
   return {key,userDataDir,profileDirectory:'Default',label:purpose==='monitor'?'Monitoramento · Amazon e Mercado Livre':'Compra · Amazon e Mercado Livre'};
 }
-async function launchDedicatedProfile({projectRoot,dataDirectory,store,purpose,headless}) {
+export async function launchDedicatedProfile({projectRoot,dataDirectory,store,purpose,headless,integracaoLoader=null,puppeteerLoader=null}) {
   const profile=chromeProfile(projectRoot,dataDirectory,store,purpose);
-  const {localizarChrome,iniciarIntegracao}=await import(pathToFileURL(join(projectRoot,'Mercado_Livre','integracao-native.mjs')).href);
+  const {localizarChrome,iniciarIntegracao}=integracaoLoader
+    ?await integracaoLoader()
+    :await import(pathToFileURL(join(projectRoot,'Mercado_Livre','integracao-native.mjs')).href);
   const executablePath=localizarChrome();if(!executablePath)throw new Error('Chrome não encontrado. Configure ML_CHROME_EXECUTABLE.');
   await mkdir(profile.userDataDir,{recursive:true});
+  if(headless===false){
+    const runtimeMod=puppeteerLoader
+      ?await puppeteerLoader()
+      :await import(pathToFileURL(join(projectRoot,'Mercado_Livre','puppeteer-headless-runtime','src','puppeteer-runtime.js')).href);
+    const puppeteer=runtimeMod.default??runtimeMod;
+    const browser=await puppeteer.launch({
+      executablePath,
+      headless:false,
+      userDataDir:profile.userDataDir,
+      defaultViewport:null,
+      protocolTimeout:15000,
+      args:[`--profile-directory=${profile.profileDirectory}`,'--start-maximized'],
+    });
+    return {browser,profile};
+  }
   const {browser}=await iniciarIntegracao({executablePath,headless,userDataDir:profile.userDataDir,timeout:15000,args:[`--profile-directory=${profile.profileDirectory}`]});
   return {browser,profile};
 }
@@ -52,6 +69,10 @@ export function createProfilePool(launcher=launchDedicatedProfile) {
     const isCurrent=()=>!closing&&!entry.closing&&!entry.disconnected&&entries.get(key)===entry;
     const disconnected=()=>lease.emit('disconnected');
     native.once('disconnected',disconnected);
+    lease.pages=async()=>{
+      if(!isCurrent())throw Object.assign(new Error('A sessão do Chrome foi encerrada.'),{code:'BROWSER_DISCONNECTED'});
+      return typeof native.pages==='function'?await native.pages():[...pages];
+    };
     lease.newPage=async()=>{
       if(!isCurrent())throw Object.assign(new Error('A sessão do Chrome foi encerrada.'),{code:'BROWSER_DISCONNECTED'});
       const page=await native.newPage();pages.add(page);page.once('close',()=>pages.delete(page));return page;
@@ -104,7 +125,9 @@ export const releaseProfile=(projectRoot,dataDirectory,store,purpose)=>sharedPro
 export async function openAccountLogin(options) {
   const {browser}=await launchProfile({...options,headless:false});
   try {
-    const page=await browser.newPage();
+    const existingPages=typeof browser.pages==='function'?await browser.pages().catch(()=>[]):[];
+    const blankPage=existingPages.find(p=>!p.isClosed?.()&&/^(?:about:blank|chrome:\/\/newtab\/?)$/i.test(p.url?.()??''));
+    const page=blankPage??await browser.newPage();
     await page.goto(options.store==='amazon'?'https://www.amazon.com.br/':'https://www.mercadolivre.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
     return browser;
   } catch(error){await browser.close();throw error;}

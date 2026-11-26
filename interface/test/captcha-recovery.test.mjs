@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { MonitoringService } from '../server/service.mjs';
 import { startML } from '../server/adapters.mjs';
 import { createMonitorRecovery } from '../server/monitor-recovery.mjs';
+import { launchDedicatedProfile } from '../server/profiles.mjs';
+import { openProductCaptcha } from '../server/captcha-resolver.mjs';
 
 const projectRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const PRODUCT_URL = 'https://produto.mercadolivre.com.br/MLB-1234567890-produto-teste-_JM';
@@ -304,3 +306,126 @@ test('service.stop() aborts active headful CAPTCHA resolution cleanly', async ()
     await rm(dataDirectory, { recursive: true, force: true });
   }
 });
+
+test('launchDedicatedProfile launches headful Chrome directly via puppeteer without iniciarIntegracao or nativeIdentity', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'vigia-headful-launch-'));
+  const integracaoCalls = [];
+  const puppeteerCalls = [];
+  const fakeHeadfulBrowser = { id: 'headful' };
+  const fakeHeadlessBrowser = { id: 'headless' };
+
+  const integracaoLoader = async () => ({
+    localizarChrome: () => '/usr/bin/google-chrome',
+    iniciarIntegracao: async opts => {
+      integracaoCalls.push(opts);
+      return { browser: fakeHeadlessBrowser };
+    },
+  });
+  const puppeteerLoader = async () => ({
+    default: {
+      launch: async opts => {
+        puppeteerCalls.push(opts);
+        return fakeHeadfulBrowser;
+      },
+    },
+  });
+
+  try {
+    const headful = await launchDedicatedProfile({
+      projectRoot: dataDirectory,
+      dataDirectory,
+      store: 'ml',
+      purpose: 'monitor',
+      headless: false,
+      integracaoLoader,
+      puppeteerLoader,
+    });
+    assert.equal(headful.browser, fakeHeadfulBrowser);
+    assert.equal(integracaoCalls.length, 0);
+    assert.equal(puppeteerCalls.length, 1);
+    assert.equal(puppeteerCalls[0].headless, false);
+    assert.equal(puppeteerCalls[0].defaultViewport, null);
+    assert.equal(puppeteerCalls[0].protocolTimeout, 15000);
+    assert.equal(puppeteerCalls[0].userDataDir, headful.profile.userDataDir);
+    assert.deepEqual(puppeteerCalls[0].args, ['--profile-directory=Default', '--start-maximized']);
+    assert.equal('nativeIdentity' in puppeteerCalls[0], false);
+
+    const headless = await launchDedicatedProfile({
+      projectRoot: dataDirectory,
+      dataDirectory,
+      store: 'ml',
+      purpose: 'monitor',
+      headless: true,
+      integracaoLoader,
+      puppeteerLoader,
+    });
+    assert.equal(headless.browser, fakeHeadlessBrowser);
+    assert.equal(integracaoCalls.length, 1);
+    assert.equal(puppeteerCalls.length, 1);
+  } finally {
+    await rm(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test('openProductCaptcha reuses the first open tab, navigates to product.url, reveals window, and notifies OS', async () => {
+  const navigated = [];
+  const notifications = [];
+  let newPageCalls = 0;
+  let revealed = false;
+  let closed = false;
+  let polls = 0;
+  let currentUrl = 'about:blank';
+
+  const firstTab = {
+    isClosed: () => false,
+    url: () => currentUrl,
+    goto: async url => {
+      navigated.push(url);
+      currentUrl = url;
+    },
+    content: async () => {
+      polls++;
+      return polls >= 2 ? '<html><title>Produto ML</title></html>' : '<html><title>Verificação</title></html>';
+    },
+  };
+
+  const browser = {
+    pages: async () => [firstTab],
+    newPage: async () => {
+      newPageCalls++;
+      return firstTab;
+    },
+    close: async () => {
+      closed = true;
+    },
+  };
+
+  await openProductCaptcha({
+    projectRoot: '.',
+    dataDirectory: '.',
+    product: { store: 'ml', code: 'MLB1234567890', name: 'Produto Teste', url: PRODUCT_URL },
+    signal: new AbortController().signal,
+    releaser: async () => {},
+    launcher: async opts => {
+      assert.equal(opts.headless, false);
+      return { browser };
+    },
+    bringToFront: async page => {
+      assert.equal(page, firstTab);
+      revealed = true;
+    },
+    notify: async notice => {
+      notifications.push(notice);
+    },
+    pollIntervalMs: 10,
+    maxWaitMs: 3000,
+  });
+
+  assert.equal(newPageCalls, 0, 'deve reaproveitar a primeira aba aberta em vez de chamar newPage()');
+  assert.deepEqual(navigated, [PRODUCT_URL]);
+  assert.equal(revealed, true);
+  assert.equal(notifications.some(n => n.title === 'Vigia · CAPTCHA detectado'), true);
+  assert.equal(notifications.some(n => n.title === 'Vigia · CAPTCHA resolvido'), true);
+  assert.equal(closed, true);
+});
+
