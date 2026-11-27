@@ -146,6 +146,38 @@ function createWindow(url) {
     },
   });
 
+  if (app.isPackaged) {
+    mainWindow.removeMenu();
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+      const key = String(input.key ?? '').toLowerCase();
+      const ctrl = input.control || input.meta;
+      const blocked =
+        key === 'f12' ||
+        key === 'f5' ||
+        (ctrl && ['r', 'p', 'u', '=', '+', '-', '0'].includes(key)) ||
+        (ctrl && input.shift && ['i', 'j', 'c', 'r'].includes(key)) ||
+        (input.alt && ['arrowleft', 'arrowright'].includes(key));
+      if (blocked) event.preventDefault();
+    });
+  }
+
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const items = [];
+    if (params.isEditable) {
+      items.push(
+        { label: 'Recortar', role: 'cut', enabled: params.editFlags.canCut },
+        { label: 'Copiar', role: 'copy', enabled: params.editFlags.canCopy },
+        { label: 'Colar', role: 'paste', enabled: params.editFlags.canPaste },
+        { type: 'separator' },
+        { label: 'Selecionar tudo', role: 'selectAll', enabled: params.editFlags.canSelectAll },
+      );
+    } else if (params.selectionText?.trim()) {
+      items.push({ label: 'Copiar', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: mainWindow });
+  });
+
   mainWindow.once('ready-to-show', () => {
     showMainWindow();
   });
@@ -211,6 +243,7 @@ app.on('before-quit', () => {
 if (gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     try {
+      if (app.isPackaged) Menu.setApplicationMenu(null);
       process.env.VIGIA_DESKTOP = '1';
       const resourcesRoot = getResourcesRoot();
       const interfaceDir = join(resourcesRoot, 'interface');

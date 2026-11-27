@@ -875,3 +875,26 @@ test('desktop mode encrypts sessionToken via tokenCodec, renders HTML callback, 
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+
+test('Amazon metadata parser accepts Weblab /images/W/.../images/I/ URLs and data-src fallbacks', async () => {
+  const { createMetadataParser, safeProductImage } = await import('../server/metadata.mjs');
+  const { resolve } = await import('node:path');
+  const projectRoot = resolve(process.cwd(), '..');
+
+  assert.equal(
+    safeProductImage('https://m.media-amazon.com/images/W/MEDIAX_792452-T2/images/I/51c9-rOytCL.jpg', 'amazon'),
+    'https://m.media-amazon.com/images/W/MEDIAX_792452-T2/images/I/51c9-rOytCL.jpg'
+  );
+  assert.equal(
+    safeProductImage('https://images-sa.ssl-images-amazon.com/images/I/41QgsVd+4JL.jpg', 'amazon'),
+    'https://images-sa.ssl-images-amazon.com/images/I/41QgsVd+4JL.jpg'
+  );
+  assert.equal(safeProductImage('https://m.media-amazon.com/images/G/01/grey-pixel.gif', 'amazon'), null);
+
+  const parse = createMetadataParser(projectRoot);
+  const htmlLazy = `<div id="aod-pinned-offer"><div id="pinned-image-id"><img id="aod-asin-image-id" src="https://m.media-amazon.com/images/G/01/grey-pixel.gif" data-src="https://m.media-amazon.com/images/W/WEBP_123/images/I/51+Wh4ejCDL.jpg"/></div><div id="aod-asin-title"><h5>Produto Lazy</h5></div></div>`;
+  const parsed = parse(htmlLazy, 'amazon');
+  assert.equal(parsed.title, 'Produto Lazy');
+  assert.equal(parsed.imageUrl, 'https://m.media-amazon.com/images/W/WEBP_123/images/I/51+Wh4ejCDL.jpg');
+});
