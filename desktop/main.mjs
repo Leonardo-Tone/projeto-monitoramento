@@ -1,10 +1,13 @@
 import { app, BrowserWindow, Menu, Notification, Tray, dialog, nativeImage, safeStorage, shell } from 'electron';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_VPS_URL = 'https://meli-gestao-sever.tail1657b1.ts.net:10000';
+const DEFAULT_DESKTOP_PORT = 43180;
 
 app.setName('Vigia');
 app.setAppUserModelId('com.vigia.monitor');
@@ -260,11 +263,24 @@ if (gotSingleInstanceLock) {
 
       const handleUpdateRestart = async manifest => {
         if (!manifest?.installerPath) return;
+        const exePath = process.execPath;
         await shutdownVigia();
-        const child = spawn(manifest.installerPath, ['/S'], {
+        const helperPath = join(tmpdir(), `vigia-update-relaunch-${process.pid}.cmd`);
+        const safeInstaller = String(manifest.installerPath).replace(/"/g, '');
+        const safeExe = String(exePath).replace(/"/g, '');
+        const script = [
+          '@echo off',
+          'timeout /t 1 /nobreak >nul',
+          `start "" /wait "${safeInstaller}" /S`,
+          `start "" "${safeExe}"`,
+          'del "%~f0" >nul 2>&1',
+          '',
+        ].join('\r\n');
+        writeFileSync(helperPath, script, 'utf8');
+        const child = spawn('cmd.exe', ['/d', '/s', '/c', helperPath], {
           detached: true,
           stdio: 'ignore',
-          windowsHide: false,
+          windowsHide: true,
         });
         child.unref();
         app.exit(0);
@@ -282,13 +298,23 @@ if (gotSingleInstanceLock) {
         onRestart: handleUpdateRestart,
       });
 
-      await new Promise((resolveListen, rejectListen) => {
-        vigiaApp.server.once('error', rejectListen);
-        vigiaApp.server.listen(0, '127.0.0.1', () => {
-          vigiaApp.server.off('error', rejectListen);
+      const listenOnPort = preferredPort => new Promise((resolveListen, rejectListen) => {
+        const onError = err => {
+          vigiaApp.server.off('error', onError);
+          if (err?.code === 'EADDRINUSE' && preferredPort !== 0) {
+            resolveListen(listenOnPort(0));
+            return;
+          }
+          rejectListen(err);
+        };
+        vigiaApp.server.once('error', onError);
+        vigiaApp.server.listen(preferredPort, '127.0.0.1', () => {
+          vigiaApp.server.off('error', onError);
           resolveListen();
         });
       });
+
+      await listenOnPort(DEFAULT_DESKTOP_PORT);
 
       const { port } = vigiaApp.server.address();
       localOrigin = `http://127.0.0.1:${port}`;
