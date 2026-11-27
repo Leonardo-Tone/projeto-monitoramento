@@ -260,3 +260,26 @@ test('start() recovers from initial Target.createTarget Session not found and ru
   assert.deepEqual(r2, [{ ok: true, value: 'recovered-during-cooldown' }]);
   assert.equal(opens, 4);
 });
+
+test('summarizeCycleOutcome keeps healthy auto-purchase products eligible when an unrelated product has 404 or divergent origin', async () => {
+  const { summarizeCycleOutcome } = await import('../server/adapters.mjs');
+  const pOk = { id: 'p-ok', auto: true };
+  const p404 = { id: 'p-404', auto: true };
+  const pDiv = { id: 'p-div', auto: false };
+  const pAutoErr = { id: 'p-auto-err', auto: true };
+
+  // Isolated 404 or divergent origin does not poison healthy products in the cycle
+  const isolated = summarizeCycleOutcome([
+    { ok: true, product: pOk },
+    { ok: false, product: p404, error: new Error('HTTP 404 no ASIN B0HGNQ3HJJ') },
+    { ok: false, product: pDiv, error: new Error('Origem da resposta ML divergente. Use o link final do anúncio ou catálogo.') },
+  ]);
+  assert.deepEqual(isolated, { ids: ['p-ok'], ok: true });
+
+  // Non-product store failure on an auto:true product still blocks the batch
+  const blocked = summarizeCycleOutcome([
+    { ok: true, product: pOk },
+    { ok: false, product: pAutoErr, error: new Error('Falha ML: HTTP 429') },
+  ]);
+  assert.deepEqual(blocked, { ids: ['p-ok'], ok: false });
+});

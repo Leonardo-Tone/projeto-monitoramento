@@ -7,7 +7,7 @@ import { createMetadataParser } from './metadata.mjs';
 import { deliveryLabel, reputationLevels, reputationMedals } from './availability.mjs';
 import { recoverAbandonedAmazonLock } from './amazon-lock.mjs';
 import { checkMonitorAccount, checkMonitoringAccounts } from './account-verification.mjs';
-import { createMonitorRecovery, monitorFailure, trackNetworkFailures } from './monitor-recovery.mjs';
+import { createMonitorRecovery, isProductLevelFailure, monitorFailure, trackNetworkFailures } from './monitor-recovery.mjs';
 import { isCaptchaError } from './captcha-resolver.mjs';
 import { continueAmazonShopping, gotoAmazonPage } from './amazon-navigation.mjs';
 
@@ -32,6 +32,21 @@ function monitoringRecovery({store,projectRoot,dataDirectory,signal,settings,pro
 export async function mlRuntime(projectRoot) {
   return moduleAt(projectRoot,'Mercado_Livre','integracao-native.mjs');
 }
+export function summarizeCycleOutcome(entries) {
+  const okIds=[];
+  let hasBlockingFailure=false;
+  for(const entry of entries){
+    if(entry.ok){
+      okIds.push(entry.product.id);
+      continue;
+    }
+    const failure=monitorFailure(entry.error);
+    const isolated=isProductLevelFailure(failure)||entry.product.auto!==true;
+    if(!isolated)hasBlockingFailure=true;
+  }
+  return {ids:okIds,ok:okIds.length>0&&!hasBlockingFailure};
+}
+
 export async function startAmazon({projectRoot,dataDirectory,products,signal,onResult,onEvent,onStatus,onCycle=()=>{},onDiagnostic=()=>{},consultar=null,settings,withMonitoringRead=work=>work(),getProducts=null,registerRecheck=()=>{},onCaptcha=null}) {
   if(signal.aborted)return;
   const recovery=await recoverAbandonedAmazonLock(dataDirectory);
@@ -111,12 +126,14 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
   });
   let byAsin=new Map(products.map(p=>[p.code,p]));
   let pendingCycle=null;
+  let cycleEntries=[];
   const originalCycle=monitor.ciclo.bind(monitor);
   monitor.ciclo=async number=>{
     if(getProducts){products=await getProducts();byAsin=new Map(products.map(p=>[p.code,p]));metadataByAsin.clear();
       config.products=validarConfig({...config,products:products.map(p=>({asin:p.code,name:p.name||p.title||p.code,enabled:true,categories:settings?.amazon.onlyAmazon?['AMAZON_DIRETA']:['AMAZON_DIRETA','TERCEIRO_ENVIO_AMAZON','TERCEIRO_ENVIO_PROPRIO'],target:{maxPriceCents:p.target==null?null:Math.round(p.target*100),priceBasis:'NORMAL',includeShipping:false}}))}).products;
     }
     pendingCycle=null;
+    cycleEntries=[];
     pendingCaptchaProduct=null;
     let result;
     try{
@@ -183,10 +200,20 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
     if(pendingCycle&&!signal.aborted)onCycle(pendingCycle);
     return result;
   };
-  monitor.on('snapshot',snapshot=>onResult(byAsin.get(snapshot.asin).id,{...amazonObservation(snapshot),...metadataByAsin.get(snapshot.asin)}));
-  monitor.on('problem',e=>onResult(byAsin.get(e.asin).id,{at:e.horario,error:`${e.code}: ${e.message}`}));
+  monitor.on('snapshot',snapshot=>{
+    const product=byAsin.get(snapshot.asin);
+    if(!product)return;
+    cycleEntries.push({ok:true,product});
+    onResult(product.id,{...amazonObservation(snapshot),...metadataByAsin.get(snapshot.asin)});
+  });
+  monitor.on('problem',e=>{
+    const product=byAsin.get(e.asin);
+    if(!product)return;
+    cycleEntries.push({ok:false,product,error:{code:e.code,status:e.status,message:e.message}});
+    onResult(product.id,{at:e.horario,error:`${e.code}: ${e.message}`});
+  });
   monitor.on('event',e=>onEvent({id:e.id,productId:byAsin.get(e.asin)?.id,type:e.tipo,at:e.horario}));
-  monitor.on('cycle',cycle=>{pendingCycle={ids:products.map(p=>p.id),ok:cycle.falhas===0};});
+  monitor.on('cycle',()=>{pendingCycle=summarizeCycleOutcome(cycleEntries);});
   monitor.on('status',e=>{if(e.status==='RODANDO')onStatus('running',runningMessage);else if(e.status==='INTERROMPIDO'&&!signal.aborted)onStatus('error',e.motivo??'Monitor interrompido.');});
   const abort=()=>monitor.parar('PARADA_MANUAL');
   signal.addEventListener('abort',abort,{once:true});
@@ -383,7 +410,7 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
         next=Date.now();
         continue;
       }
-      onCycle({ids:products.map(p=>p.id),ok:results.every(result=>result.ok)});
+      onCycle(summarizeCycleOutcome(results.map(result=>({ok:result.ok,product:result.product,error:result.erro}))));
       next+=15_000;
       if(next<Date.now()+500)next+=Math.ceil((Date.now()+500-next)/15_000)*15_000;
       await new Promise(resolve=>{const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve();};const timer=setTimeout(finish,Math.max(0,next-Date.now()));signal.addEventListener('abort',finish,{once:true});if(signal.aborted)finish();});

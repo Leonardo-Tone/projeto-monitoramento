@@ -36,7 +36,7 @@ export function trackNetworkFailures(page) {
   };
 }
 
-function isProductLevelFailure(failure) {
+export function isProductLevelFailure(failure) {
   if (!failure) return false;
   if (failure.kind === 'HTTP' && failure.status === 404) return true;
   if (/origem .*divergente/i.test(failure.message)) return true;
