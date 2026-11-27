@@ -126,10 +126,22 @@ export function createMonitorRecovery({
   }
 
   return {
-    async start() { browser = await open(false); },
+    async start() {
+      try {
+        browser = await open(false);
+      } catch (caught) {
+        signal.throwIfAborted();
+        const failure = monitorFailure(caught);
+        if (!failure.retryable) throw caught;
+        onStatus('reconnecting', 'Reconectando: reiniciando o Chrome compartilhado.');
+        report('RESTART_BROWSER', failure);
+        await replaceBrowser();
+      }
+    },
     async close() { await browser?.close?.(); },
     async run(collect) {
       let retriedTab = false;
+      let restartedInRun = false;
       let reconnecting = false;
       for (;;) {
         signal.throwIfAborted();
@@ -164,10 +176,13 @@ export function createMonitorRecovery({
         report('READ_FAILED', failure);
         if (!failure.retryable) browser?.clearFailure?.(store);
         const bothFailed = failure.retryable && browser?.reportFailure?.(store);
-        const replace = !browser || !browser.isCurrent() || bothFailed || failure.kind === 'BROWSER_DISCONNECTED' ||
-          retriedTab && failure.kind === 'CHROME_TIMEOUT';
-        if (failure.retryable && replace && !inRestartCooldown()) {
+        const deadBrowser = !browser || !browser.isCurrent() || failure.kind === 'BROWSER_DISCONNECTED';
+        const replace = deadBrowser || bothFailed || (retriedTab && failure.kind === 'CHROME_TIMEOUT');
+        const canRestartNow = !inRestartCooldown() || (deadBrowser && !restartedInRun);
+        if (failure.retryable && replace && canRestartNow) {
+          if (inRestartCooldown()) await waitAbortable(retryDelayMs, signal);
           lastRestartAt = Date.now();
+          restartedInRun = true;
           reconnecting = true;
           onStatus('reconnecting', 'Reconectando: reiniciando o Chrome compartilhado.');
           report('RESTART_BROWSER', failure);

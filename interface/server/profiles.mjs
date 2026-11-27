@@ -132,6 +132,7 @@ export async function openAccountLogin(options) {
     const blankPage=existingPages.find(p=>!p.isClosed?.()&&/^(?:about:blank|chrome:\/\/newtab\/?)$/i.test(p.url?.()??''));
     const page=blankPage??await browser.newPage();
     await page.goto(options.store==='amazon'?'https://www.amazon.com.br/':'https://www.mercadolivre.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
+    await page.bringToFront().catch(()=>{});
     return browser;
   } catch(error){await browser.close();throw error;}
 }

@@ -54,7 +54,14 @@ const displayName=product=>product.name?.trim()||product.title||product.code;
 const outdatedServiceMessage='Reinicie o Vigia para atualizar o serviço local.';
 let toastTimer;
 const seenEvents=new Set();
-const failedImages=new Set();
+const failedImages=new Map();
+const IMAGE_RETRY_TTL_MS=30_000;
+function isImageTemporarilyFailed(url){
+  const at=failedImages.get(url);
+  if(!at)return false;
+  if(Date.now()-at>=IMAGE_RETRY_TTL_MS){failedImages.delete(url);return false;}
+  return true;
+}
 let eventsPrimed=false;
 const dateTime=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',dateStyle:'short',timeStyle:'medium'});
 function formatTime(value){return value&&!Number.isNaN(Date.parse(value))?dateTime.format(new Date(value)):'Ainda não consultado';}
@@ -75,7 +82,10 @@ function applyState(next){
       if(eventsPrimed&&p?.alert&&(p.target!=null?event.type==='ALVO_ATINGIDO':['AMAZON_DIRETA_AGORA_VISIVEL','DISPONIBILIDADE_CONFIRMADA'].includes(event.type)))toast(`Alerta: ${displayName(p)} · ${event.type==='ALVO_ATINGIDO'?'preço limite atingido':'disponibilidade observada'}`);
     }
   }
-  if(next.appVersion&&$('app-version'))$('app-version').textContent=`Vigia · ${next.appVersion}`;
+  if(next.appVersion){
+    if($('app-version'))$('app-version').textContent=`Vigia · ${next.appVersion}`;
+    if($('sidebar-app-version'))$('sidebar-app-version').textContent=`Vigia · v${next.appVersion}`;
+  }
   eventsPrimed=true;
   render();updateMonitor();updateAccounts();renderPurchases();updateAuth();
 }
@@ -107,7 +117,7 @@ function productCard(p) {
   const status = p.error ? ['unknown','Leitura desatualizada'] : p.rawAvailable===true&&p.eligible===false ? ['unavailable','Fora do filtro'] : p.available === true ? ['available','Disponível'] : p.available === false ? ['unavailable','Indisponível'] : ['unknown',p.observation==='identity_mismatch'?'Oferta divergente':p.observation==='unknown_identity'?'Identidade não confirmada':p.lastCheckedAt?'Não observado':'Aguardando consulta'];
   const price = p.price === null ? '<div class="price empty">Preço não informado</div>' : `<div class="price"><small>R$</small>${money.format(p.price)}</div>`;
   return `<article class="product-card ${p.error?'has-error':''}" data-product="${escapeHtml(p.id)}" aria-label="${escapeHtml(displayName(p))}">
-    <div class="product-main"><div class="product-art ${escapeHtml(p.art)}">${p.imageUrl&&!failedImages.has(p.imageUrl)?`<img class="product-photo" src="${escapeHtml(p.imageUrl)}" alt="${escapeHtml(displayName(p))}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`:''}${artwork(p.art)}</div><div class="product-info"><div class="product-tags"><span class="store-name ${p.store==='amazon'?'amazon':'ml'}">${storeNames[p.store]}</span><span class="sku">${escapeHtml(p.code)}</span>${p.pendingEdit?'<span class="sample-label">Alteração salva · próximo ciclo</span>':''}${p.sample?'<span class="sample-label">EXEMPLO</span>':''}</div><h3 class="product-title" title="${escapeHtml(displayName(p))}">${escapeHtml(displayName(p))}</h3><div class="seller-info"><span>${svg('shop')}Vendido por <strong>${escapeHtml(p.seller)}</strong></span><span>${svg('truck')}Entregue por <strong>${escapeHtml(p.delivery)}</strong></span>${p.store==='ml'?`<span class="reputation-label">Reputação: <strong>${escapeHtml(reputationLabel(p))}</strong></span>`:''}</div><div class="last-check">${svg('clock')}<span>Último monitoramento: <strong>${escapeHtml(formatTime(p.lastCheckedAt))}</strong></span>${p.error?'<span class="stale-tag">Desatualizado</span>':''}${p.eligibilityReason?`<span class="eligibility-note">${escapeHtml(p.eligibilityReason)}</span>`:''}</div>${p.error?`<div class="product-error">Tentativa em ${escapeHtml(formatTime(p.lastAttemptAt))}: ${escapeHtml(p.error)}</div>`:''}</div><div class="price-area">${price}<div class="freight-note">Preço sem frete · ${p.freight==null?'frete não informado':'frete R$ '+money.format(p.freight)}</div><span class="badge ${status[0]}"><i class="status-dot ${p.available===true?'green':''}"></i>${status[1]}</span></div><div class="product-actions">${p.url?`<a class="icon-button" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir ${escapeHtml(displayName(p))} na loja" title="Abrir na loja">${svg('external')}</a>`:''}<button class="icon-button" data-action="history" data-id="${escapeHtml(p.id)}" title="Histórico de disponibilidade" aria-label="Histórico de disponibilidade de ${escapeHtml(displayName(p))}">${svg('clock')}</button><button class="icon-button" ${productEditLocked()?'disabled':''} data-action="edit" data-id="${escapeHtml(p.id)}" aria-label="Editar ${escapeHtml(displayName(p))}" title="Editar produto">${svg('edit')}</button><button class="icon-button delete-button" ${isLocked()?'disabled':''} data-action="remove" data-id="${escapeHtml(p.id)}" aria-label="Remover ${escapeHtml(displayName(p))}" title="Remover produto">${svg('trash')}</button></div></div>
+    <div class="product-main"><div class="product-art ${escapeHtml(p.art)}">${p.imageUrl&&!isImageTemporarilyFailed(p.imageUrl)?`<img class="product-photo" src="${escapeHtml(p.imageUrl)}" alt="${escapeHtml(displayName(p))}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`:''}${artwork(p.art)}</div><div class="product-info"><div class="product-tags"><span class="store-name ${p.store==='amazon'?'amazon':'ml'}">${storeNames[p.store]}</span><span class="sku">${escapeHtml(p.code)}</span>${p.pendingEdit?'<span class="sample-label">Alteração salva · próximo ciclo</span>':''}${p.sample?'<span class="sample-label">EXEMPLO</span>':''}</div><h3 class="product-title" title="${escapeHtml(displayName(p))}">${escapeHtml(displayName(p))}</h3><div class="seller-info"><span>${svg('shop')}Vendido por <strong>${escapeHtml(p.seller)}</strong></span><span>${svg('truck')}Entregue por <strong>${escapeHtml(p.delivery)}</strong></span>${p.store==='ml'?`<span class="reputation-label">Reputação: <strong>${escapeHtml(reputationLabel(p))}</strong></span>`:''}</div><div class="last-check">${svg('clock')}<span>Último monitoramento: <strong>${escapeHtml(formatTime(p.lastCheckedAt))}</strong></span>${p.error?'<span class="stale-tag">Desatualizado</span>':''}${p.eligibilityReason?`<span class="eligibility-note">${escapeHtml(p.eligibilityReason)}</span>`:''}</div>${p.error?`<div class="product-error">Tentativa em ${escapeHtml(formatTime(p.lastAttemptAt))}: ${escapeHtml(p.error)}</div>`:''}</div><div class="price-area">${price}<div class="freight-note">Preço sem frete · ${p.freight==null?'frete não informado':'frete R$ '+money.format(p.freight)}</div><span class="badge ${status[0]}"><i class="status-dot ${p.available===true?'green':''}"></i>${status[1]}</span></div><div class="product-actions">${p.url?`<a class="icon-button" href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" aria-label="Abrir ${escapeHtml(displayName(p))} na loja" title="Abrir na loja">${svg('external')}</a>`:''}<button class="icon-button" data-action="history" data-id="${escapeHtml(p.id)}" title="Histórico de disponibilidade" aria-label="Histórico de disponibilidade de ${escapeHtml(displayName(p))}">${svg('clock')}</button><button class="icon-button" ${productEditLocked()?'disabled':''} data-action="edit" data-id="${escapeHtml(p.id)}" aria-label="Editar ${escapeHtml(displayName(p))}" title="Editar produto">${svg('edit')}</button><button class="icon-button delete-button" ${isLocked()?'disabled':''} data-action="remove" data-id="${escapeHtml(p.id)}" aria-label="Remover ${escapeHtml(displayName(p))}" title="Remover produto">${svg('trash')}</button></div></div>
     <div class="product-controls">${switchControl(p,'alert','Alerta de disponibilidade','bell')}<span class="controls-divider"></span><label class="quantity-control">Quantidade<input class="quantity-input" type="number" min="1" max="100" step="1" data-action="quantity" data-id="${escapeHtml(p.id)}" value="${p.quantity??1}" ${productEditLocked()?'disabled':''} aria-label="Quantidade desejada para ${escapeHtml(displayName(p))}"></label><label class="target-control">Limite por unidade<span class="target-wrap"><span>R$</span><input class="target-input" ${productEditLocked()?'disabled':''} inputmode="decimal" maxlength="15" placeholder="Sem limite" data-action="target" data-id="${escapeHtml(p.id)}" value="${p.target===null?'':money.format(p.target)}" aria-label="Preço limite para ${escapeHtml(displayName(p))}"></span></label><span class="controls-divider"></span>${switchControl(p,'auto','Comprar automaticamente','bolt')}</div>
   </article>`;
 }
@@ -246,7 +256,7 @@ $('product-form').addEventListener('submit',async e=>{
     $('product-dialog').close();toast(editing?(monitoring?'Alteração salva. Será aplicada no próximo ciclo.':'Produto atualizado. Outro anúncio exige uma nova leitura.'):'Produto adicionado. A próxima consulta preencherá os dados.');
   }catch(error){$('product-error').textContent=error.message;}
 });
-$('product-list').addEventListener('error',e=>{if(e.target.classList.contains('product-photo')){failedImages.add(e.target.src);e.target.hidden=true;}},true);
+$('product-list').addEventListener('error',e=>{if(e.target.classList.contains('product-photo')){failedImages.set(e.target.src,Date.now());e.target.hidden=true;}},true);
 $('product-list').addEventListener('change',async e=>{
   const el=e.target,p=products.find(p=>p.id===el.dataset.id);if(!p)return;
   let patch;
@@ -537,22 +547,33 @@ function updateAuth() {
   const navAdmin = $('nav-admin');
   const banner = $('update-banner');
   const bannerText = $('update-banner-text');
+  const spinner = $('update-spinner');
+  const applyBtn = $('update-apply-btn');
 
   if (banner && bannerText) {
-    if (upd && ['downloading', 'installing', 'restarting'].includes(upd.status)) {
+    if (upd && ['downloading', 'ready', 'installing', 'restarting'].includes(upd.status)) {
       banner.hidden = false;
       const ver = upd.availableVersion ? ` v${upd.availableVersion}` : '';
+      const isReady = upd.status === 'ready';
+      if (spinner) spinner.hidden = isReady;
+      if (applyBtn) {
+        applyBtn.hidden = !isReady;
+        applyBtn.disabled = busy || Boolean(state?.purchases?.busy);
+      }
       bannerText.textContent = upd.status === 'downloading'
         ? `Baixando atualização${ver}…`
-        : upd.status === 'installing'
-          ? `Instalando atualização${ver}…`
-          : `Atualização${ver} pronta · reiniciando Vigia…`;
+        : isReady
+          ? `Atualização${ver} pronta · aguarde a compra ou clique para reiniciar`
+          : upd.status === 'installing'
+            ? `Instalando atualização${ver}…`
+            : `Atualização${ver} pronta · reiniciando Vigia…`;
       if (upd.status === 'restarting' && !waitingForUpdateReload) {
         waitingForUpdateReload = true;
         setTimeout(() => location.reload(), 2500);
       }
     } else {
       banner.hidden = true;
+      if (applyBtn) applyBtn.hidden = true;
     }
   }
 
@@ -717,6 +738,19 @@ $('auth-logout')?.addEventListener('click', () => {
   const msg = $('logout-message');
   if (msg) msg.textContent = email ? `Deseja encerrar a sessão de ${email}?` : 'Deseja encerrar sua sessão no Vigia?';
   $('logout-dialog')?.showModal();
+});
+
+$('update-apply-btn')?.addEventListener('click', async () => {
+  if (state?.purchases?.busy) {
+    toast('Aguarde a conclusão da compra em andamento antes de atualizar.');
+    return;
+  }
+  try {
+    if (monitoring) await action('monitor/stop');
+    await action('updates/apply', 'POST', {});
+  } catch (err) {
+    toast(err.message);
+  }
 });
 
 $('confirm-logout')?.addEventListener('click', async () => {

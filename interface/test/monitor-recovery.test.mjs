@@ -203,3 +203,60 @@ test('monitorFailure classifies Session/Target with given id not found as retrya
   assert.equal(targetErr.retryable, true);
 });
 
+
+test('start() recovers from initial Target.createTarget Session not found and run() recovers dead browser even during cooldown', async () => {
+  const events = [];
+  let opens = 0;
+  let browserAlive = true;
+  const makeBrowser = () => ({
+    isCurrent: () => browserAlive,
+    reportFailure: () => false,
+    clearFailure() {},
+    async resetPages() {},
+    async restart() {},
+    async close() {},
+  });
+  const recovery = createMonitorRecovery({
+    store: 'amazon',
+    signal: new AbortController().signal,
+    async open() {
+      opens++;
+      if (opens === 1) {
+        throw new Error('Protocol error (Target.createTarget): Session with given id not found.');
+      }
+      browserAlive = true;
+      return makeBrowser();
+    },
+    clearPages() {},
+    onStatus() {},
+    onDiagnostic: e => events.push(e.action),
+    retryDelayMs: 0,
+    restartDelayMs: 0,
+    restartCooldownMs: 60_000,
+  });
+
+  // 1. Startup auto-recovers from Session with given id not found
+  await recovery.start();
+  assert.equal(opens, 2);
+
+  // 2. First runtime disconnect triggers browser restart and sets 60s cooldown
+  let cycle1 = 0;
+  const r1 = await recovery.run(async () => {
+    if (++cycle1 === 1) throw new Error('Protocol error (Target.createTarget): Session with given id not found.');
+    return [{ ok: true, value: 'recovered-1' }];
+  });
+  assert.deepEqual(r1, [{ ok: true, value: 'recovered-1' }]);
+  assert.equal(opens, 3);
+
+  // 3. Immediate second disconnect WITHIN 60s cooldown still replaces dead browser instead of throwing fatal error
+  let cycle2 = 0;
+  const r2 = await recovery.run(async () => {
+    if (++cycle2 === 1) {
+      browserAlive = false;
+      throw new Error('Protocol error (Target.createTarget): Session with given id not found.');
+    }
+    return [{ ok: true, value: 'recovered-during-cooldown' }];
+  });
+  assert.deepEqual(r2, [{ ok: true, value: 'recovered-during-cooldown' }]);
+  assert.equal(opens, 4);
+});

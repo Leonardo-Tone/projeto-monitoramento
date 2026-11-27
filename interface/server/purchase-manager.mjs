@@ -7,8 +7,8 @@ import { verifyPurchaseHistory } from './account-verification.mjs';
 const ordersPage=store=>store==='amazon'?'Meus Pedidos da Amazon':'Minhas compras';
 
 export class PurchaseManager {
-  constructor({registry,save,projectRoot,dataDirectory,getSettings,getProducts,getExpectedStores,isPurchaseProfileOpen,notify,runner=runPurchase,amazonRunner=runAmazonPurchase,verifyHistory=verifyPurchaseHistory,pauseMonitoring=async()=>()=>{}}) {
-    Object.assign(this,{registry,save,projectRoot,dataDirectory,getSettings,getProducts,getExpectedStores,isPurchaseProfileOpen,notify,runner,amazonRunner,verifyHistory,pauseMonitoring});
+  constructor({registry,save,projectRoot,dataDirectory,getSettings,getProducts,getExpectedStores,isPurchaseProfileOpen,notify,onProductsDisarmed=null,runner=runPurchase,amazonRunner=runAmazonPurchase,verifyHistory=verifyPurchaseHistory,pauseMonitoring=async()=>()=>{}}) {
+    Object.assign(this,{registry,save,projectRoot,dataDirectory,getSettings,getProducts,getExpectedStores,isPurchaseProfileOpen,notify,onProductsDisarmed,runner,amazonRunner,verifyHistory,pauseMonitoring});
     registry.purchaseOrders??=[];
     this.recoveredChanges=false;
     // Never repeat a request whose result could have reached the marketplace.
@@ -80,8 +80,9 @@ export class PurchaseManager {
         const {orderReferences,...purchase}=result;
         Object.assign(order,purchase,{human:null,status:card?'CARD_PAID':'PIX_PENDING',message:card?'Pagamento com cartão confirmado. Compra automática desativada nos produtos deste pedido.':'Pix gerado. Compra automática desativada nos produtos deste pedido. Revise e pague manualmente no seu banco.',updatedAt:new Date().toISOString()});
         if(Array.isArray(orderReferences))order.historyVerification={status:'PENDING'};
-        this.disarmProducts(order);order.autoDisabledAt=new Date().toISOString();
+        const disarmed=this.disarmProducts(order);order.autoDisabledAt=new Date().toISOString();
         await this.save(this.registry);
+        if(disarmed)await Promise.resolve(this.onProductsDisarmed?.()).catch(()=>{});
         await this.notify({id:randomUUID(),title:card?'Vigia · pagamento confirmado':'Vigia · Pix gerado',message:`Pedido com ${order.items.length} produto(s), total R$ ${(order.totalCents/100).toFixed(2).replace('.',',')}.${card?'':' Revise o Pix no painel.'}`}).catch(error=>{order.notificationError=String(error.message).slice(0,200);});
         if(Array.isArray(orderReferences)){
           order.historyVerification=await this.verifyHistory({
@@ -110,7 +111,8 @@ export class PurchaseManager {
     if(this.task)throw new Error('Aguarde a compra em andamento.');
     const order=this.registry.purchaseOrders.find(o=>o.id===id);if(!order)throw new Error('Pedido não encontrado.');
     if(order.status==='FINALIZING')throw new Error('Pedido em finalização.');
-    this.disarmProducts(order);
+    const disarmed=this.disarmProducts(order);
     order.status='CLOSED';order.message='Revisado pelo usuário. Compra automática desativada nestes produtos.';order.updatedAt=new Date().toISOString();await this.save(this.registry);
+    if(disarmed)await Promise.resolve(this.onProductsDisarmed?.()).catch(()=>{});
   }
 }

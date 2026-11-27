@@ -387,6 +387,8 @@ export function createVpsServer({
             if (err.code === 'ENOENT') return sendJson(404, { error: 'Pacote de atualização não encontrado.' });
             throw err;
           }
+          req.setTimeout(300_000);
+          res.setTimeout(300_000);
           res.writeHead(200, {
             'Content-Type': safeName.endsWith('.exe') ? 'application/octet-stream' : 'application/gzip',
             'Content-Length': String(fileStat.size),
@@ -457,7 +459,7 @@ export function createVpsServer({
     }
   });
 
-  server.requestTimeout = 30000;
+  server.requestTimeout = 120_000;
 
   return {
     server,

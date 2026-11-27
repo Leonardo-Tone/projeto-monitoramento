@@ -23,9 +23,9 @@ const active=status=>['starting','running','reconnecting','stopping'].includes(s
 
 export class MonitoringService {
 
-  constructor({registry,save,projectRoot,dataDirectory,adapters={amazon:startAmazon,ml:startML},loginOpener=openAccountLogin,captchaOpener=openProductCaptcha,notifier=notifySystem,purchaseRunner}) {
+  constructor({registry,save,projectRoot,dataDirectory,adapters={amazon:startAmazon,ml:startML},loginOpener=openAccountLogin,captchaOpener=openProductCaptcha,notifier=notifySystem,purchaseRunner,onProductsDisarmed=null}) {
 
-    Object.assign(this,{registry,save,projectRoot,dataDirectory,adapters,loginOpener,captchaOpener,notifier});
+    Object.assign(this,{registry,save,projectRoot,dataDirectory,adapters,loginOpener,captchaOpener,notifier,onProductsDisarmed});
     this.activeCaptcha=null;
 
     // Callbacks que os adaptadores registram para re-verificação instantânea.
@@ -47,7 +47,7 @@ export class MonitoringService {
 
     this.purchases=new PurchaseManager({registry,save,projectRoot,dataDirectory,runner:purchaseRunner,getSettings:()=>this.settings,getProducts:()=>registry.products,
 
-      getExpectedStores:()=>['amazon','ml'].filter(store=>registry.products.some(p=>p.store===store)),isPurchaseProfileOpen:()=>['amazon/purchase','ml/purchase'].some(key=>this.logins.has(key)||this.loginTasks.has(key)),notify:notice=>this.notify(notice),pauseMonitoring:signal=>this.monitorGate.pause(signal)});
+      getExpectedStores:()=>['amazon','ml'].filter(store=>registry.products.some(p=>p.store===store)),isPurchaseProfileOpen:()=>['amazon/purchase','ml/purchase'].some(key=>this.logins.has(key)||this.loginTasks.has(key)),notify:notice=>this.notify(notice),onProductsDisarmed:()=>this.onProductsDisarmed?.(),pauseMonitoring:signal=>this.monitorGate.pause(signal)});
 
   }
 

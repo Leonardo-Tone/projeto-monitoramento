@@ -22,6 +22,7 @@ let tray = null;
 let vigiaApp = null;
 let localOrigin = null;
 let quitting = false;
+let shutdownCompleted = false;
 let notifiedMinimizeToTray = false;
 
 function getResourcesRoot() {
@@ -239,8 +240,15 @@ app.on('window-all-closed', () => {
   if (quitting) app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
   quitting = true;
+  if (!shutdownCompleted && vigiaApp) {
+    event.preventDefault();
+    void shutdownVigia().finally(() => {
+      shutdownCompleted = true;
+      app.quit();
+    });
+  }
 });
 
 if (gotSingleInstanceLock) {
@@ -264,14 +272,17 @@ if (gotSingleInstanceLock) {
       const handleUpdateRestart = async manifest => {
         if (!manifest?.installerPath) return;
         const exePath = process.execPath;
+        shutdownCompleted = true;
         await shutdownVigia();
         const helperPath = join(tmpdir(), `vigia-update-relaunch-${process.pid}.cmd`);
         const safeInstaller = String(manifest.installerPath).replace(/"/g, '');
+        const safeTempDir = manifest.tempDir ? String(manifest.tempDir).replace(/"/g, '') : '';
         const safeExe = String(exePath).replace(/"/g, '');
         const script = [
           '@echo off',
           'timeout /t 1 /nobreak >nul',
           `start "" /wait "${safeInstaller}" /S`,
+          ...(safeTempDir ? [`rmdir /s /q "${safeTempDir}" >nul 2>&1`] : []),
           `start "" "${safeExe}"`,
           'del "%~f0" >nul 2>&1',
           '',

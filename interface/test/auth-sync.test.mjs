@@ -898,3 +898,117 @@ test('Amazon metadata parser accepts Weblab /images/W/.../images/I/ URLs and dat
   assert.equal(parsed.title, 'Produto Lazy');
   assert.equal(parsed.imageUrl, 'https://m.media-amazon.com/images/W/WEBP_123/images/I/51+Wh4ejCDL.jpg');
 });
+
+test('applyRemoteUserData preserves local images, titles, prices and confirmations across restarts while resetting confirmations on target change', () => {
+  const existingProduct = {
+    id: 'prod-amz-1',
+    store: 'amazon',
+    code: 'B09V3KXJPB',
+    type: 'amazon',
+    url: 'https://www.amazon.com.br/dp/B09V3KXJPB',
+    catalog: null,
+    expectedSellerId: null,
+    name: 'Meu Produto',
+    title: 'Título Extraído Amazon',
+    imageUrl: 'https://m.media-amazon.com/images/W/MEDIAX_1/images/I/51test.jpg',
+    target: 200,
+    quantity: 1,
+    alert: true,
+    auto: true,
+    price: 189.9,
+    available: true,
+    seller: 'Amazon.com.br',
+    delivery: 'Amazon.com.br',
+    freight: 0,
+    art: 'box',
+    sample: false,
+    lastCheckedAt: '2026-11-27T01:50:00.000Z',
+    lastAttemptAt: '2026-11-27T01:50:00.000Z',
+    error: null,
+    observation: 'OFERTA_VISIVEL',
+    availabilityNotification: { confirmed: { available: true, withinTarget: true }, pending: null, count: 2 },
+  };
+  const fakeService = { registry: { products: [existingProduct], settings: null }, settings: null };
+
+  // Same target/identity from VPS -> local imageUrl, title, price, and confirmation are preserved!
+  applyRemoteUserData(fakeService, {
+    exists: true,
+    products: [{
+      id: 'prod-amz-1',
+      store: 'amazon',
+      url: 'https://www.amazon.com.br/dp/B09V3KXJPB',
+      name: 'Meu Produto',
+      target: 200,
+      quantity: 1,
+      alert: true,
+      auto: true,
+    }],
+  });
+  const p1 = fakeService.registry.products[0];
+  assert.equal(p1.imageUrl, 'https://m.media-amazon.com/images/W/MEDIAX_1/images/I/51test.jpg');
+  assert.equal(p1.title, 'Título Extraído Amazon');
+  assert.equal(p1.price, 189.9);
+  assert.deepEqual(p1.availabilityNotification?.confirmed, { available: true, withinTarget: true });
+
+  // Target changed remotely -> imageUrl/title/price stay, confirmation resets cleanly
+  applyRemoteUserData(fakeService, {
+    exists: true,
+    products: [{
+      id: 'prod-amz-1',
+      store: 'amazon',
+      url: 'https://www.amazon.com.br/dp/B09V3KXJPB',
+      name: 'Meu Produto',
+      target: 150,
+      quantity: 1,
+      alert: true,
+      auto: true,
+    }],
+  });
+  const p2 = fakeService.registry.products[0];
+  assert.equal(p2.imageUrl, 'https://m.media-amazon.com/images/W/MEDIAX_1/images/I/51test.jpg');
+  assert.equal(p2.target, 150);
+  assert.equal(p2.availabilityNotification, undefined);
+});
+
+test('AutoUpdater defers restart while monitoring/purchasing is active and applies on applyReadyUpdate()', async () => {
+  const { AutoUpdater } = await import('../server/updater.mjs');
+  const { createHash } = await import('node:crypto');
+  const { rm } = await import('node:fs/promises');
+  const fakeExe = Buffer.from('MZ-VIGIA-0.12.0-INSTALLER');
+  const sha256 = createHash('sha256').update(fakeExe).digest('hex');
+  let restartedWith = null;
+  let busy = true;
+
+  const updater = new AutoUpdater({
+    authClient: {
+      authenticated: true,
+      offlineMode: false,
+      fetchLatestUpdate: async () => ({
+        available: true,
+        version: '0.12.0',
+        filename: 'Vigia-Setup-0.12.0.exe',
+        sha256,
+        notes: 'Pacote consolidado',
+      }),
+      downloadUpdate: async () => fakeExe,
+    },
+    currentVersion: '0.11.2',
+    desktopMode: true,
+    platform: 'win32',
+    shouldDeferRestart: () => busy,
+    onRestart: async manifest => { restartedWith = manifest; },
+  });
+
+  const deferred = await updater.checkAndApply();
+  assert.equal(deferred, true);
+  assert.equal(updater.state().status, 'ready');
+  assert.equal(restartedWith, null);
+
+  busy = false;
+  const applied = await updater.applyReadyUpdate();
+  assert.equal(applied, true);
+  assert.equal(updater.state().status, 'restarting');
+  assert.ok(restartedWith?.installerPath?.endsWith('Vigia-Setup-0.12.0.exe'));
+  assert.ok(restartedWith?.tempDir);
+  await rm(restartedWith.tempDir, { recursive: true, force: true }).catch(() => {});
+});

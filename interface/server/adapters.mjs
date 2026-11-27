@@ -7,7 +7,7 @@ import { createMetadataParser } from './metadata.mjs';
 import { deliveryLabel, reputationLevels, reputationMedals } from './availability.mjs';
 import { recoverAbandonedAmazonLock } from './amazon-lock.mjs';
 import { checkMonitorAccount, checkMonitoringAccounts } from './account-verification.mjs';
-import { createMonitorRecovery, trackNetworkFailures } from './monitor-recovery.mjs';
+import { createMonitorRecovery, monitorFailure, trackNetworkFailures } from './monitor-recovery.mjs';
 import { isCaptchaError } from './captcha-resolver.mjs';
 
 const moduleAt=(...parts)=>import(pathToFileURL(join(...parts)).href);
@@ -50,10 +50,11 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
   // Interruptible waits preserve the core scheduler while making Stop responsive.
   const sleep=ms=>new Promise(resolve=>{if(signal.aborted)return resolve();const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve();};const timer=setTimeout(finish,ms);signal.addEventListener('abort',finish,{once:true});});
   const runningMessage='Monitoramento ativo · atualizações a cada 15 s';
+  const clearAmazonPages=()=>{amazonPage=null;fetchImpl=null;};
   if(!consultar){
     onStatus('starting','Preparando o perfil Chrome de monitoramento Amazon…');
     transport=monitoringRecovery({store:'amazon',projectRoot,dataDirectory,signal,settings,products,onStatus,onDiagnostic,runningMessage,
-      clearPages:()=>{amazonPage=null;fetchImpl=null;}});
+      clearPages:clearAmazonPages});
   }
   const parseMetadata=transport?createMetadataParser(projectRoot):null;
   const ensureAmazonPage=async browser=>{
@@ -109,13 +110,23 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
     try{
       result=await originalCycle(number);
     }catch(error){
-      if(!signal.aborted&&isCaptchaError(error)&&onCaptcha){
+      if(signal.aborted)return {tipo:'CICLO',ciclo:number,produtos:products.length,sucesso:0,falhas:products.length};
+      if(isCaptchaError(error)&&onCaptcha){
         const captchaTarget=pendingCaptchaProduct??products[0];
         if(captchaTarget){
           await onCaptcha(captchaTarget);
-          if(signal.aborted)return;
           return {tipo:'CICLO',ciclo:number,produtos:products.length,sucesso:0,falhas:products.length};
         }
+      }
+      const failure=monitorFailure(error);
+      if(failure.retryable){
+        clearAmazonPages();
+        onStatus('reconnecting','Reconectando Amazon no próximo ciclo…');
+        onDiagnostic({action:'CYCLE_DEFERRED_RECOVERY',...failure});
+        const at=new Date().toISOString();
+        for(const p of products)onResult(p.id,{at,error:failure.message});
+        onCycle({ids:products.map(p=>p.id),ok:false});
+        return {tipo:'CICLO',ciclo:number,produtos:products.length,sucesso:0,falhas:products.length,duracaoMs:0,lento:false};
       }
       throw error;
     }
@@ -298,6 +309,17 @@ export async function startML({projectRoot,dataDirectory,products,signal,onResul
             next=Date.now();
             continue;
           }
+        }
+        const failure=monitorFailure(erro);
+        if(failure.retryable){
+          clearPages();
+          onStatus('reconnecting','Reconectando Mercado Livre no próximo ciclo…');
+          onDiagnostic({action:'CYCLE_DEFERRED_RECOVERY',...failure});
+          for(const p of products)onResult(p.id,{error:failure.message});
+          onCycle({ids:products.map(p=>p.id),ok:false});
+          next=Date.now()+15_000;
+          await new Promise(resolve=>{const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve();};const timer=setTimeout(finish,15_000);signal.addEventListener('abort',finish,{once:true});if(signal.aborted)finish();});
+          continue;
         }
         throw erro;
       }

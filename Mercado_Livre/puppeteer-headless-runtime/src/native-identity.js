@@ -15,7 +15,9 @@ async function launchNativeIdentity(puppeteer, options, configuration) {
   const sessions = new Map();
   const connections = new Map();
   let browser;
+  let launched = false;
   let closing = false;
+  const TRANSIENT_TARGET_RE = /Target closed|Session closed|No (?:target|session) with given id|(?:Target|Session) with given id not found|Inspected target navigated or closed|Execution context was destroyed|CannotAttachToTarget/i;
   const filter = options.targetFilter;
   const targetFilter = target => filter ? filter(target) : true;
   Object.defineProperty(targetFilter, INITIALIZER, {value: async ({session, parentSession, targetInfo, waitingForDebugger}) => {
@@ -42,15 +44,16 @@ async function launchNativeIdentity(puppeteer, options, configuration) {
       event.status = 'configured';
       return {retainSession: WORKERS.has(targetInfo.type)};
     } catch (error) {
-      if (session.detached || /Target closed|Session closed|No (?:target|session) with given id|(?:Target|Session) with given id not found/i.test(error.message)) {
+      if (session.detached || TRANSIENT_TARGET_RE.test(error?.message ?? '')) {
         event.status = 'cancelled'; event.error = error.message;
         sessions.delete(session.id());
         return {cancelled: true};
       }
       event.status = 'error'; event.error = error.message;
-      // Never silently return an apparently successful measurement after an
-      // initializer failure. TargetManager handles detachment without rejection.
-      if (browser && !closing) {
+      // Only abort the browser if initialization fails during initial launch.
+      // Once launched, TargetManager catches this error and runs silentDetach()
+      // on the individual iframe/worker without killing the shared Chrome process.
+      if (!launched && browser && !closing) {
         closing = true;
         void browser.close().catch(() => {});
       }
@@ -72,6 +75,7 @@ async function launchNativeIdentity(puppeteer, options, configuration) {
       args: [...(options.args || []), `--user-agent=${override.userAgent}`]});
     buildOverride(reference, await browser.version(), browserChoice);
     if (snapshot().errors.length) throw new Error('Falha na inicialização nativa de um alvo.');
+    launched = true;
     Object.defineProperty(browser, 'nativeIdentity', {value: {
       snapshot,
       async releaseWorkers(filter) {

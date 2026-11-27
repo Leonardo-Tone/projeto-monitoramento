@@ -41,18 +41,20 @@ export function validateTarListing(stdout) {
 }
 
 export class AutoUpdater {
-  constructor({ authClient, targetDirectory, currentVersion, onRestart = null, desktopMode = process.env.VIGIA_DESKTOP === '1', platform = process.platform } = {}) {
+  constructor({ authClient, targetDirectory, currentVersion, onRestart = null, desktopMode = process.env.VIGIA_DESKTOP === '1', platform = process.platform, shouldDeferRestart = null } = {}) {
     this.authClient = authClient;
     this.targetDirectory = targetDirectory;
     this.currentVersion = currentVersion ?? null;
     this.onRestart = onRestart;
     this.desktopMode = Boolean(desktopMode);
     this.platform = platform;
-    this.status = 'idle'; // idle | checking | downloading | installing | restarting | up_to_date | error
+    this.shouldDeferRestart = shouldDeferRestart;
+    this.status = 'idle'; // idle | checking | downloading | ready | installing | restarting | up_to_date | error
     this.availableVersion = null;
     this.notes = '';
     this.error = null;
     this.inFlight = null;
+    this.readyUpdate = null;
   }
 
   async resolveCurrentVersion() {
@@ -131,34 +133,23 @@ export class AutoUpdater {
         const archivePath = join(tempDir, safeFilename);
         await writeFile(archivePath, buffer);
 
-        this.status = 'installing';
-        if (isExe) {
+        if (!isExe) {
+          const { stdout: listing } = await execFileAsync('tar', ['-tvzf', archivePath], { timeout: 30000 });
+          validateTarListing(listing);
+        }
+
+        if (typeof this.shouldDeferRestart === 'function' && this.shouldDeferRestart()) {
           keepTempForInstaller = true;
-          this.currentVersion = manifest.version;
-          this.status = 'restarting';
-          if (typeof this.onRestart === 'function') {
-            await this.onRestart({ ...manifest, installerPath: archivePath });
+          if (this.readyUpdate?.tempDir && this.readyUpdate.tempDir !== tempDir) {
+            await rm(this.readyUpdate.tempDir, { recursive: true, force: true }).catch(() => {});
           }
+          this.readyUpdate = { manifest, isExe, archivePath, tempDir };
+          this.status = 'ready';
           return true;
         }
 
-        const { stdout: listing } = await execFileAsync('tar', ['-tvzf', archivePath], { timeout: 30000 });
-        validateTarListing(listing);
-
-        await execFileAsync('tar', [
-          '-xzf', archivePath,
-          '--exclude=.data',
-          '--exclude=.runtime',
-          '--exclude=.env',
-          '-C', this.targetDirectory,
-        ], { timeout: 60000 });
-
-        this.currentVersion = manifest.version;
-        this.status = 'restarting';
-        if (typeof this.onRestart === 'function') {
-          await this.onRestart(manifest);
-        }
-        return true;
+        if (isExe) keepTempForInstaller = true;
+        return await this._finalizeInstall({ manifest, isExe, archivePath, tempDir });
       } catch (err) {
         this.status = 'error';
         this.error = err.message;
@@ -170,6 +161,61 @@ export class AutoUpdater {
       }
     })();
 
+    try {
+      return await this.inFlight;
+    } finally {
+      this.inFlight = null;
+    }
+  }
+
+  async _finalizeInstall({ manifest, isExe, archivePath, tempDir }) {
+    this.status = 'installing';
+    if (isExe) {
+      this.currentVersion = manifest.version;
+      this.status = 'restarting';
+      if (typeof this.onRestart === 'function') {
+        await this.onRestart({ ...manifest, installerPath: archivePath, tempDir });
+      }
+      return true;
+    }
+
+    try {
+      await execFileAsync('tar', [
+        '-xzf', archivePath,
+        '--exclude=.data',
+        '--exclude=.runtime',
+        '--exclude=.env',
+        '-C', this.targetDirectory,
+      ], { timeout: 60000 });
+
+      this.currentVersion = manifest.version;
+      this.status = 'restarting';
+      if (typeof this.onRestart === 'function') {
+        await this.onRestart(manifest);
+      }
+      return true;
+    } finally {
+      if (tempDir) {
+        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
+
+  async applyReadyUpdate() {
+    if (!this.readyUpdate) return false;
+    if (this.inFlight) return this.inFlight;
+    const pending = this.readyUpdate;
+    this.readyUpdate = null;
+    this.inFlight = (async () => {
+      try {
+        return await this._finalizeInstall(pending);
+      } catch (err) {
+        this.status = 'error';
+        this.error = err.message;
+        await rm(pending.tempDir, { recursive: true, force: true }).catch(() => {});
+        return false;
+      }
+    })();
     try {
       return await this.inFlight;
     } finally {

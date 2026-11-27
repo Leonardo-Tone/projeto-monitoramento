@@ -330,7 +330,7 @@ export class AuthClient {
     try {
       res = await this.fetchImpl(`${this.vpsUrl}/api/updates/download/${encodeURIComponent(filename)}`, {
         headers: { Authorization: `Bearer ${this.session.sessionToken}` },
-        signal: AbortSignal.timeout(60000),
+        signal: AbortSignal.timeout(300_000),
       });
     } catch (networkErr) {
       const timedOut = networkErr?.name === 'TimeoutError' || networkErr?.name === 'AbortError';

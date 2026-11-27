@@ -6,6 +6,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { loadRegistry, registryWriter, lockService } from './server/storage.mjs';
 import { productInput } from './server/model.mjs';
+import { safeProductImage } from './server/metadata.mjs';
 import { validateSettings, defaults } from './server/availability.mjs';
 import { MonitoringService } from './server/service.mjs';
 import { recoverAbandonedAmazonLock } from './server/amazon-lock.mjs';
@@ -18,17 +19,22 @@ const projectRoot=resolve(process.env.MONITOR_PROJECT_ROOT??join(directory,'..')
 const defaultData=join(directory,'.data');
 const appVersion=JSON.parse(await readFile(join(directory,'package.json'),'utf8')).version;
 
-const SYNC_PRODUCT_FIELDS = ['id', 'store', 'url', 'name', 'target', 'quantity', 'alert', 'auto', 'expectedSellerId'];
+const SYNC_INPUT_FIELDS = ['id', 'store', 'url', 'name', 'target', 'quantity', 'alert', 'auto', 'expectedSellerId'];
 const PRODUCT_ID_RE = /^[a-zA-Z0-9-]{1,64}$/;
 const LOCAL_STATE_TTL_MS = 5 * 60 * 1000;
 
 function pickSyncProduct(raw) {
   const picked = {};
-  for (const key of SYNC_PRODUCT_FIELDS) {
+  for (const key of SYNC_INPUT_FIELDS) {
     if (raw && Object.hasOwn(raw, key) && raw[key] !== undefined) {
       picked[key] = raw[key];
     }
   }
+  if (typeof raw?.title === 'string' && raw.title.trim()) {
+    picked.title = raw.title.replace(/\s+/g, ' ').trim().slice(0, 500);
+  }
+  const safeImg = safeProductImage(raw?.imageUrl, raw?.store);
+  if (safeImg) picked.imageUrl = safeImg;
   return picked;
 }
 
@@ -45,6 +51,9 @@ function safeDecodeParam(raw) {
 export function applyRemoteUserData(service, remoteData) {
   if (!remoteData?.exists) return false;
   if (Array.isArray(remoteData.products)) {
+    const existingList = Array.isArray(service.registry?.products) ? service.registry.products : [];
+    const existingById = new Map(existingList.filter(p => p && typeof p.id === 'string').map(p => [p.id, p]));
+    const existingByIdentity = new Map(existingList.filter(p => p?.store && p?.code).map(p => [`${p.store}:${p.code}`, p]));
     const validatedProducts = [];
     const seenIds = new Set();
     const seenKeys = new Set();
@@ -53,13 +62,27 @@ export function applyRemoteUserData(service, remoteData) {
       try {
         if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !PRODUCT_ID_RE.test(raw.id)) continue;
         const picked = pickSyncProduct(raw);
-        const validated = productInput(picked, null);
+        const probe = productInput(picked, null);
+        const key = `${probe.store}:${probe.code}`;
+        if (seenIds.has(picked.id) || seenKeys.has(key) || ++counts[probe.store] > 10) continue;
+        const candidateLocal = existingById.get(picked.id) ?? existingByIdentity.get(key) ?? null;
+        const sameIdentity = candidateLocal &&
+          candidateLocal.store === probe.store &&
+          candidateLocal.code === probe.code &&
+          (candidateLocal.catalog ?? null) === (probe.catalog ?? null);
+        const validated = sameIdentity ? { ...productInput(picked, candidateLocal), id: picked.id } : { ...probe, id: picked.id };
         if (validated.auto && validated.target === null) validated.auto = false;
-        const key = `${validated.store}:${validated.code}`;
-        if (seenIds.has(picked.id) || seenKeys.has(key) || ++counts[validated.store] > 10) continue;
+        if (sameIdentity) {
+          if (candidateLocal.target !== validated.target || candidateLocal.expectedSellerId !== validated.expectedSellerId || candidateLocal.alert !== validated.alert) {
+            delete validated.mlConfirmation;
+            delete validated.availabilityNotification;
+          }
+        }
+        if (!validated.title && picked.title) validated.title = picked.title;
+        if (!validated.imageUrl && picked.imageUrl) validated.imageUrl = picked.imageUrl;
         seenIds.add(picked.id);
         seenKeys.add(key);
-        validatedProducts.push({ ...validated, id: picked.id });
+        validatedProducts.push(validated);
       } catch {}
     }
     service.registry.products = validatedProducts;
@@ -83,7 +106,8 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
       ids.add(p.id);identities.add(key);
     }
     const save=registryWriter(dataDirectory);
-    const service=new MonitoringService({registry,save,projectRoot:root,dataDirectory,adapters,loginOpener,notifier,purchaseRunner});
+    let syncToVps=async()=>null;
+    const service=new MonitoringService({registry,save,projectRoot:root,dataDirectory,adapters,loginOpener,notifier,purchaseRunner,onProductsDisarmed:()=>syncToVps().catch(()=>{})});
     const clearAccountLocalState=async()=>{
       service.registry.products=[];
       service.settings=defaults();
@@ -104,9 +128,10 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
     };
     const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs,onSessionRevoked:handleSessionRevoked,tokenCodec});
     await authClient.init();
-    const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart,desktopMode});
+    const isServiceBusy=()=>Boolean(service.state().running||service.purchases.state().busy);
+    const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart,desktopMode,shouldDeferRestart:isServiceBusy});
     let lastAppliedRemoteUpdatedAt=null;
-    const syncToVps=async()=>{
+    syncToVps=async()=>{
       if(!authClient.authenticated)return null;
       const products=service.registry.products.map(pickSyncProduct);
       const pushed=await authClient.pushUserData({products,settings:service.settings});
@@ -124,7 +149,7 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
     if(authClient.authenticated&&!authClient.offlineMode){
       try {
         await ensureAccountOwner(authClient.session?.user?.id);
-        if(authClient.pendingSync){
+        if(authClient.pendingSync||service.purchases.recoveredChanges){
           await syncToVps();
         }
         const remote=await authClient.pullUserData();
@@ -217,7 +242,7 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
         if(!isOAuthCallback&&!isRootNavigation&&((req.headers.origin&&req.headers.origin!==origin)||req.headers['sec-fetch-site']==='cross-site'))return json(403,{error:'Origem não permitida.'});
         res.setHeader('X-Content-Type-Options','nosniff');
         res.setHeader('Referrer-Policy','no-referrer');
-        res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://http2.mlstatic.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+        res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://m.media-amazon.com https://images-na.ssl-images-amazon.com https://images-sa.ssl-images-amazon.com https://images-eu.ssl-images-amazon.com https://images-fe.ssl-images-amazon.com https://http2.mlstatic.com https://lh3.googleusercontent.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
         if(req.method==='GET'&&url.pathname==='/api/auth/start'){
           if(!authClient.enabled)return json(400,{error:'Servidor VPS não configurado.'});
           const localState=issueLocalState();
@@ -299,6 +324,10 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
           const targetEmail=safeDecodeParam(url.pathname.slice('/api/admin/allowlist/'.length));
           try {return json(200,await authClient.adminRemoveEmail(targetEmail));}catch(error){return json(error.status??400,{error:error.message});}
         }
+        if(req.method==='POST'&&url.pathname==='/api/updates/apply'){
+          await updater.applyReadyUpdate();
+          return json(200,{...sanitizedState(),auth:authClient.state(origin),update:updater.state(),apiVersion});
+        }
         const operation=async()=>{
           let shouldSync=false;
           if(req.method==='POST'&&url.pathname==='/api/products'){await service.add(input);shouldSync=true;}
@@ -326,7 +355,7 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
           }
           else if(req.method==='POST'&&url.pathname==='/api/monitor/stop')await service.stop();
           else if(req.method==='POST'&&url.pathname==='/api/notifications/test')await service.notify({id:randomBytes(16).toString('hex'),title:'Vigia · teste de notificação',message:'Os alertas de disponibilidade e Pix aparecem nas notificações do Windows.'});
-          else if(req.method==='POST'&&/^\/api\/purchases\/[^/]+\/resolve$/.test(url.pathname))await service.purchases.resolve(safeDecodeParam(url.pathname.split('/')[3]));
+          else if(req.method==='POST'&&/^\/api\/purchases\/[^/]+\/resolve$/.test(url.pathname)){await service.purchases.resolve(safeDecodeParam(url.pathname.split('/')[3]));shouldSync=true;}
           else if(req.method==='POST'&&/^\/api\/accounts\/(amazon|ml)\/(monitor|purchase)\/(open|close)$/.test(url.pathname)) {
             const [,,,store,purpose,operation]=url.pathname.split('/');
             if(operation==='open')await service.openLogin(store,purpose);else await service.closeLogin(store,purpose);

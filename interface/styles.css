@@ -1129,9 +1129,17 @@ body:has(dialog[open]) { overflow: hidden; }
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   animation: vigia-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.update-apply-btn {
+  min-height: 30px;
+  padding: 5px 12px;
+  font-size: 12px;
+  margin-left: 4px;
+  white-space: nowrap;
 }
 @keyframes vigia-spin {
   to { transform: rotate(360deg); }
