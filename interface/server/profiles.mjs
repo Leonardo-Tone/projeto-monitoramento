@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { closeOwnedBrowser } from './browser-cleanup.mjs';
+import { gotoAmazonPage, isAmazonShoppingWall } from './amazon-navigation.mjs';
 
 export const accountKeys=['amazon/monitor','amazon/purchase','ml/monitor','ml/purchase'];
 export function chromeProfile(projectRoot,dataDirectory,store,purpose) {
@@ -131,33 +132,56 @@ export async function openAccountLogin(options) {
     const existingPages=typeof browser.pages==='function'?await browser.pages().catch(()=>[]):[];
     const blankPage=existingPages.find(p=>!p.isClosed?.()&&/^(?:about:blank|chrome:\/\/newtab\/?)$/i.test(p.url?.()??''));
     const page=blankPage??await browser.newPage();
-    await page.goto(options.store==='amazon'?'https://www.amazon.com.br/':'https://www.mercadolivre.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
+    if(options.store==='amazon')await gotoAmazonPage(page,'https://www.amazon.com.br/',{timeout:20000});
+    else await page.goto('https://www.mercadolivre.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
     await page.bringToFront().catch(()=>{});
     return browser;
   } catch(error){await browser.close();throw error;}
 }
 
 // Transport runs inside the Amazon monitoring profile; session cookies never enter the UI.
-export function profileFetch(page,{timeoutMs=12000,ErrorClass=Error,onHtml=null}={}) {
+export function profileFetch(page,{timeoutMs=12000,ErrorClass=Error,onHtml=null,recoverShoppingWall=null}={}) {
   const fail=(message,code='PROFILE_ACCESS')=>{throw new ErrorClass(message,{code,blocking:true});};
-  return async(url)=>{
-    const target=new URL(url);
-    if(target.origin!=='https://www.amazon.com.br')fail('Origem Amazon inválida.');
+  let recovery, recoveryVersion=0;
+  const read=async target=>{
     if(page.isClosed?.())throw Object.assign(new Error('Target closed: aba de monitoramento Amazon encerrada.'),{code:'BROWSER_DISCONNECTED'});
     let timer;
-    const result=await Promise.race([
+    return Promise.race([
       page.evaluate(async({url,timeoutMs})=>{
         const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeoutMs);
         try {
           const response=await fetch(url,{credentials:'same-origin',redirect:'follow',signal:controller.signal,headers:{Accept:'text/html, */*','Accept-Language':'pt-BR,pt;q=0.9'}});
-          return {status:response.status,url:response.url,html:response.status===200?await response.text():''};
+          const html=[200,403,429,503].includes(response.status)?await response.text():'';
+          return {status:response.status,url:response.url,html};
         } finally {clearTimeout(timer);}
       },{url:target.href,timeoutMs}),
       new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('Runtime.callFunctionOn timed out (profileFetch).'),{code:'CHROME_TIMEOUT'})),timeoutMs+5000);}),
     ]).finally(()=>clearTimeout(timer));
+  };
+  return async url=>{
+    const target=new URL(url);
+    if(target.origin!=='https://www.amazon.com.br')fail('Origem Amazon inválida.');
+    const version=recoveryVersion;
+    let result=await read(target);
+    if(isAmazonShoppingWall(result.url,result.html)){
+      const manual='A Amazon exige verificação manual na página “Continuar comprando”.';
+      if(!recoverShoppingWall)fail(manual,'CAPTCHA');
+      // A delayed response may still contain the wall after another read cleared it.
+      if(version===recoveryVersion){
+        recovery??=recoverShoppingWall(target.href).then(()=>{recoveryVersion++;}).finally(()=>{recovery=null;});
+        try{
+          await recovery;
+        }catch(error){
+          if(error.code==='CAPTCHA')fail(error.message,'CAPTCHA');
+          throw error;
+        }
+      }
+      result=await read(target);
+      if(isAmazonShoppingWall(result.url,result.html))fail(manual,'CAPTCHA');
+    }
     const final=new URL(result.url);
     if(final.origin!==target.origin||/\/ap\/|captcha|challenge|account-verification/i.test(final.pathname))fail('A Amazon exige login ou verificação manual no perfil de monitoramento.','SESSION_REQUIRED');
     if(result.status===200&&onHtml)onHtml(result.html,target);
-    return {status:result.status,text:async()=>result.html};
+    return {status:result.status,text:async()=>result.status===200?result.html:''};
   };
 }

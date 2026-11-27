@@ -6,6 +6,7 @@ import { amazonOrigin, cartLine, copyPix, createAmazonCheckoutParser, placeOrder
 import { captureAmazonPix, installAmazonPixCopy, validateAmazonPix } from './amazon-pix-copy.mjs';
 import { observeAmazonPaymentButtons, saveAmazonFailureHtml } from './amazon-diagnostics.mjs';
 import { checkoutOrderReferences } from './account-verification.mjs';
+import { continueAmazonShopping, gotoAmazonPage, isAmazonShoppingWall } from './amazon-navigation.mjs';
 
 const categories = new Set(['AMAZON_DIRETA', 'TERCEIRO_ENVIO_AMAZON', 'TERCEIRO_ENVIO_PROPRIO']);
 const cartUrl = amazonOrigin + '/cart';
@@ -207,19 +208,24 @@ export async function runAmazonPurchase({
     checkpoint = message;
     await stage(status, message, details);
   };
-  const read = (page, paths) => readAcrossNavigation(page, async () => {
+  const readOptions = { timeout: 15000, signal, readHtml: readPurchaseHtml };
+  const read = async (page, paths) => {
+    let html = await readAcrossNavigation(page, () => readPurchaseHtml(page), { signal });
+    if (isAmazonShoppingWall(page.url(), html)) {
+      await continueAmazonShopping(page, { ...readOptions, html });
+      html = await readAcrossNavigation(page, () => readPurchaseHtml(page), { signal });
+    }
     assertAmazonPage(page, paths);
-    const html = await readPurchaseHtml(page);
     snapshots.set(page, { html, url: page.url() });
     if (/<title[^>]*>\s*robot check|id=["']captchacharacters["']/i.test(html)) {
       throw new Error('A Amazon exige verificação no perfil Compra.');
     }
     return html;
-  }, { signal });
+  };
   const go = async (page, url, paths) => {
     signal?.throwIfAborted();
     diagnosticPage = page;
-    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const response = await gotoAmazonPage(page, url, readOptions);
     assertAmazonPage(page, paths);
     if (response?.status() !== 200) throw new Error('A Amazon retornou HTTP ' + response?.status() + '.');
   };
@@ -305,8 +311,8 @@ export async function runAmazonPurchase({
     if (headless) await page.evaluateOnNewDocument(observeAmazonPaymentButtons);
     await setStage('REVALIDATING', 'Abrindo o carrinho da Amazon no perfil Compra.');
     await page.bringToFront();
-    await go(page, cartUrl, cartPath);
     await setStage('REVALIDATING', 'Lendo o carrinho inicial da Amazon.');
+    await go(page, cartUrl, cartPath);
     const before = parser.cart(await read(page, cartPath));
     if (!before.ready || before.lines.some(line => !['0', '1'].includes(line.selection))) {
       throw new Error('Seleção do carrinho inicial da Amazon não verificável.');
@@ -395,13 +401,13 @@ export async function runAmazonPurchase({
     let retryAt = null, methodChecked = false, retriedCheckedMethod = false, stablePayment;
     let waitingForPaymentBaseline = false;
     const review = await wait(async () => {
-      assertAmazonPage(page);
+      const html = await read(page);
       const parsedUrl = new URL(page.url());
       if (!checkoutPath.test(parsedUrl.pathname)) {
         if (cartPath.test(parsedUrl.pathname)) return null;
         throw new Error('A Amazon abriu uma etapa desconhecida após o carrinho.');
       }
-      const current = parser.review(await read(page, checkoutPath));
+      const current = parser.review(html);
       if (current.deliveryBlocker) {
         await setStage('CHECKOUT', 'Verificando disponibilidade de entrega no endereço da Amazon.');
         throw new Error(current.deliveryBlocker);

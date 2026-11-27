@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { launchProfile } from './profiles.mjs';
 import { inspectPurchasePage } from './purchase-dom.mjs';
 import { isMlBrowserWall, waitForMlBrowserWall } from './ml-verification.mjs';
+import { gotoAmazonPage } from './amazon-navigation.mjs';
 
 const pages = {
   ml: {
@@ -42,7 +43,9 @@ export async function checkMonitorAccount({ store, purpose, browser, projectRoot
   const marketplace = store === 'amazon' ? 'Amazon' : 'Mercado Livre';
   const load = loader(projectRoot);
   try {
-    const response = await page.goto(pages[store].profile, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const response = store === 'amazon'
+      ? await gotoAmazonPage(page, pages[store].profile, { timeout: 15000, signal })
+      : await page.goto(pages[store].profile, { waitUntil: 'domcontentloaded', timeout: 15000 });
     if (store === 'ml' && (isMlBrowserWall(response?.url?.()) || isMlBrowserWall(page.url()))) {
       const state = await waitForMlBrowserWall(async () => {
         if (isMlBrowserWall(page.url())) {
@@ -149,7 +152,9 @@ export async function verifyPurchaseHistory({ store, references, projectRoot, da
     let status;
     for (let attempt = 0; attempt < 2; attempt++) {
       signal.throwIfAborted();
-      const response = await page.goto(pages[store].history, { waitUntil: 'domcontentloaded', timeout: 10000 });
+      const response = store === 'amazon'
+        ? await gotoAmazonPage(page, pages[store].history, { timeout: 10000, signal })
+        : await page.goto(pages[store].history, { waitUntil: 'domcontentloaded', timeout: 10000 });
       status = response?.status() === 200
         ? matchPurchaseHistory({ store, references, url: page.url(), html: await page.content(), projectRoot })
         : 'UNAVAILABLE';

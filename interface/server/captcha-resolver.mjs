@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { launchProfile, releaseProfile } from './profiles.mjs';
+import { isAmazonShoppingWall } from './amazon-navigation.mjs';
 
 export function isCaptchaError(error) {
   if (!error) return false;
@@ -12,7 +13,8 @@ export function isCaptchaError(error) {
 export function isCaptchaPage(url = '', html = '') {
   const parsed = String(url ?? '');
   const body = String(html ?? '');
-  return /captcha|challenge|account-verification|\/errors\/validateCaptcha/i.test(parsed) ||
+  return isAmazonShoppingWall(parsed, body) ||
+    /captcha|challenge|account-verification|\/errors\/validateCaptcha/i.test(parsed) ||
     /<title[^>]*>[^<]*(?:captcha|robot check|verifica|challenge)/i.test(body) ||
     /id=["']captchacharacters["']/i.test(body) ||
     /<(?:iframe|div)\b[^>]*(?:g-recaptcha|h-captcha|src=["'][^"']*(?:recaptcha|hcaptcha))/i.test(body);

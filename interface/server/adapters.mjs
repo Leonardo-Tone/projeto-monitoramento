@@ -9,6 +9,7 @@ import { recoverAbandonedAmazonLock } from './amazon-lock.mjs';
 import { checkMonitorAccount, checkMonitoringAccounts } from './account-verification.mjs';
 import { createMonitorRecovery, monitorFailure, trackNetworkFailures } from './monitor-recovery.mjs';
 import { isCaptchaError } from './captcha-resolver.mjs';
+import { continueAmazonShopping, gotoAmazonPage } from './amazon-navigation.mjs';
 
 const moduleAt=(...parts)=>import(pathToFileURL(join(...parts)).href);
 const verification=url=>/account-verification|captcha|challenge|\/login|\/auth\//i.test(url??'');
@@ -61,12 +62,23 @@ export async function startAmazon({projectRoot,dataDirectory,products,signal,onR
     if(!fetchImpl||!amazonPage||amazonPage.isClosed?.()){
       const page=await browser.newPage();
       const network=trackNetworkFailures(page);
-      const response=await page.goto('https://www.amazon.com.br/',{waitUntil:'domcontentloaded',timeout:20000});
+      const response=await gotoAmazonPage(page,'https://www.amazon.com.br/',{timeout:20000,signal});
       if(!response)throw new Error('Falha de rede ao abrir a Amazon (net::ERR_FAILED).');
       if(response.status()!==200)throw new Error('Amazon: HTTP '+response.status());
       const html=await page.content();
       if(/\/ap\/|captcha|challenge/i.test(new URL(page.url()).pathname)||/robot check|captchacharacters|\/errors\/validateCaptcha/i.test(html))throw new Error('Prepare o login ou a verificação no perfil de monitoramento Amazon antes de iniciar.');
-      const fetch=profileFetch(page,{timeoutMs:config.timeoutMs,ErrorClass:AodError,onHtml:(html,url)=>metadataByAsin.set(url.searchParams.get('asin'),parseMetadata(html,'amazon'))});
+      const fetch=profileFetch(page,{
+        timeoutMs:config.timeoutMs,ErrorClass:AodError,
+        onHtml:(html,url)=>metadataByAsin.set(url.searchParams.get('asin'),parseMetadata(html,'amazon')),
+        async recoverShoppingWall(url){
+          signal.throwIfAborted();
+          const recoveryPage=await browser.newPage();
+          try {
+            await recoveryPage.goto(url,{waitUntil:'domcontentloaded',timeout:config.timeoutMs});
+            await continueAmazonShopping(recoveryPage,{timeout:config.timeoutMs,signal});
+          } finally {await recoveryPage.close().catch(()=>{});}
+        },
+      });
       amazonPage=page;
       fetchImpl=async url=>{
         network.clear(url);
