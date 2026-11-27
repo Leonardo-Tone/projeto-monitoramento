@@ -18,6 +18,7 @@
       <button class="nav-item active" id="nav-products"><span data-icon="grid"></span>Produtos <span class="nav-count" id="nav-count">0</span></button>
       <button class="nav-item" id="nav-settings"><span data-icon="settings"></span>Configurações</button>
       <button class="nav-item" id="nav-admin" hidden><span data-icon="shield"></span>Administração</button>
+      <button class="nav-item" id="nav-browser-tests" hidden><span data-icon="flask"></span>Testes do navegador</button>
     </nav>
     <div class="sidebar-bottom"><div class="sidebar-footer"><span class="status-dot" id="sidebar-status-dot"></span> <span id="sidebar-app-version">Vigia Desktop</span> <span>PT-BR</span></div></div>
   </aside>
@@ -142,7 +143,90 @@
           </section>
         </div>
       </section>
-      <div class="footnote"><span data-icon="shield"></span><p>No Pix, o pagamento é feito manualmente no seu banco; no cartão, a cobrança ocorre no checkout.</p><span id="app-version">Vigia · 0.12.1</span></div>
+      <section id="browser-tests-view" class="admin-view browser-tests-view" aria-labelledby="browser-tests-title" hidden>
+        <div class="page-heading">
+          <div>
+            <h1 id="browser-tests-title">Testes do navegador headless</h1>
+            <p>Execute os diagnósticos de runtime, anti-detecção (PixelScan e CreepJS), workers e estabilidade da mesma tecnologia usada pelo Vigia.</p>
+          </div>
+          <div class="bt-header-actions">
+            <button type="button" class="button primary" id="bt-run-all"><span data-icon="play"></span>Executar todos os testes</button>
+            <button type="button" class="button secondary" id="browser-tests-refresh"><span data-icon="refresh"></span>Atualizar</button>
+          </div>
+        </div>
+        <dl class="admin-stats-grid bt-env-grid" aria-label="Ambiente de testes do navegador">
+          <div class="admin-stat-card"><dt>Runtime Puppeteer</dt><dd><strong id="bt-env-runtime">—</strong></dd></div>
+          <div class="admin-stat-card"><dt>Google Chrome</dt><dd><strong id="bt-env-chrome">—</strong></dd></div>
+          <div class="admin-stat-card"><dt>Status da execução</dt><dd><strong id="bt-env-status">Pronto</strong></dd></div>
+          <div class="admin-stat-card admin-stat-active"><dt>Execuções salvas</dt><dd><strong id="bt-env-count">00</strong></dd></div>
+        </dl>
+        <section id="bt-active-panel" class="admin-card bt-active-panel" aria-live="polite" hidden>
+          <div class="bt-active-header">
+            <div class="bt-active-title">
+              <span class="update-spinner bt-spinner" aria-hidden="true"></span>
+              <div>
+                <strong id="bt-active-name">Executando teste…</strong>
+                <small id="bt-active-meta">Iniciando…</small>
+              </div>
+            </div>
+            <button type="button" class="button danger" id="bt-cancel-btn"><span data-icon="stop"></span>Cancelar teste</button>
+          </div>
+          <div id="bt-batch-progress" class="bt-batch-progress" hidden>
+            <div class="bt-batch-progress-meta">
+              <span id="bt-batch-label">Bateria em andamento</span>
+              <strong id="bt-batch-counter">0 / 0</strong>
+            </div>
+            <div class="bt-progress-track"><div id="bt-progress-fill" class="bt-progress-fill"></div></div>
+          </div>
+          <pre id="bt-active-log" class="bt-log"></pre>
+        </section>
+        <div class="bt-toolbar">
+          <div class="store-tabs" id="bt-category-tabs" role="tablist" aria-label="Filtrar testes por categoria">
+            <button type="button" class="store-tab active" role="tab" aria-selected="true" data-bt-category="all">Todos</button>
+            <button type="button" class="store-tab" role="tab" aria-selected="false" data-bt-category="runtime">Runtime</button>
+            <button type="button" class="store-tab" role="tab" aria-selected="false" data-bt-category="detectors">Detectores</button>
+            <button type="button" class="store-tab" role="tab" aria-selected="false" data-bt-category="stability">Estabilidade</button>
+          </div>
+          <div id="bt-class-actions" class="bt-class-actions" aria-label="Executar todos os testes por classe"></div>
+        </div>
+        <div class="bt-main-layout">
+          <section class="admin-card" aria-labelledby="bt-catalog-heading">
+            <div class="admin-card-header">
+              <div>
+                <h2 id="bt-catalog-heading">Bateria de testes <span id="bt-catalog-count" class="admin-count">0</span></h2>
+                <p>Testes integrados coletam automaticamente a referência nativa do Chrome local antes de rodar.</p>
+              </div>
+            </div>
+            <div id="bt-catalog-list" class="bt-catalog-list"></div>
+          </section>
+          <div class="bt-results-column">
+            <section class="admin-card" aria-labelledby="bt-detail-heading">
+              <div class="admin-card-header">
+                <div>
+                  <h2 id="bt-detail-heading">Resultado detalhado</h2>
+                  <p id="bt-detail-subtitle">Selecione uma execução ou inicie um teste para ver o diagnóstico.</p>
+                </div>
+              </div>
+              <div id="bt-detail-body" class="bt-detail-body">
+                <div class="admin-empty">Nenhuma execução selecionada ainda.</div>
+              </div>
+            </section>
+            <section class="admin-card" aria-labelledby="bt-history-heading">
+              <div class="admin-card-header">
+                <div>
+                  <h2 id="bt-history-heading">Histórico recente <span id="bt-history-count" class="admin-count">0</span></h2>
+                  <p>Resultados ficam salvos localmente neste computador.</p>
+                </div>
+                <button type="button" class="button secondary" id="bt-clear-history">Limpar</button>
+              </div>
+              <div id="bt-history-list" class="bt-history-list">
+                <div class="admin-empty">Nenhum teste executado ainda.</div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+      <div class="footnote"><span data-icon="shield"></span><p>No Pix, o pagamento é feito manualmente no seu banco; no cartão, a cobrança ocorre no checkout.</p><span id="app-version">Vigia · 0.13.0</span></div>
     </main>
   </div>
   <dialog id="product-dialog" aria-labelledby="product-dialog-title"><form id="product-form"><div class="dialog-header"><div><h2 id="product-dialog-title">Adicionar produto</h2></div><button type="button" class="icon-button" data-close="product-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p class="dialog-intro">Adicione um link e prepare as regras para acompanhar o produto.</p><label class="field">Plataforma<select id="product-store"><option value="amazon">Amazon</option><option value="ml">Mercado Livre</option></select><small id="capacity-note">Até 10 produtos por plataforma.</small></label><label class="field">Link do produto<input id="product-url" type="url" placeholder="https://www.amazon.com.br/dp/..." required maxlength="2000"><small>Use o link do produto na plataforma selecionada. Ao mudar para outro anúncio, os dados anteriores serão limpos e a compra automática será desativada.</small></label><label class="field">Nome do produto (opcional)<input id="product-name" placeholder="Título do anúncio" maxlength="100"><small>Deixe em branco para usar o título encontrado pelo monitor.</small></label><label class="field" id="seller-field" hidden>ID do vendedor esperado (opcional)<input id="product-seller" inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" placeholder="Ex.: 768826009"><small>Se informado, uma oferta de outro vendedor será marcada como divergente.</small></label><label class="field">Preço limite por unidade (opcional)<div class="money-input"><span>R$</span><input id="product-target" type="text" inputmode="decimal" placeholder="0,00" maxlength="15"></div><small>Quando definido, os alertas só disparam para preços iguais ou menores que esse valor. Em branco, avisa em qualquer disponibilidade.</small></label><label class="field">Quantidade desejada<input id="product-quantity" type="number" min="1" max="100" step="1" value="1" required><small>Se houver menos unidades, o carrinho será ajustado para a quantidade disponível.</small></label><p class="form-error" id="product-error" role="alert"></p><div class="inline-notice"><span data-icon="info"></span>Preço, disponibilidade e horário serão preenchidos na primeira consulta válida. Em catálogos do Mercado Livre, cole o link da oferta específica que deseja acompanhar.</div></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="product-dialog">Cancelar</button><button type="submit" class="button primary" id="product-submit"><span data-icon="plus"></span>Adicionar ao radar</button></div></form></dialog>
@@ -210,6 +294,7 @@
   <dialog id="remove-dialog" aria-labelledby="remove-title"><div class="dialog-header"><h2 id="remove-title">Remover do radar?</h2><button class="icon-button" data-close="remove-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="remove-message"></p><p class="dialog-intro">O produto e suas regras serão removidos do cadastro do painel.</p></div><div class="dialog-footer"><button class="button secondary" data-close="remove-dialog">Cancelar</button><button class="button danger" id="confirm-remove">Remover produto</button></div></dialog>
   <dialog id="logout-dialog" aria-labelledby="logout-title"><div class="dialog-header"><h2 id="logout-title">Sair da conta?</h2><button type="button" class="icon-button" data-close="logout-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="logout-message"></p><p class="dialog-intro">Você precisará entrar novamente com sua conta Google para acessar seus produtos e sincronizar configurações.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="logout-dialog">Cancelar</button><button type="button" class="button danger" id="confirm-logout">Sair da conta</button></div></dialog>
   <dialog id="revoke-access-dialog" aria-labelledby="revoke-access-title"><div class="dialog-header"><h2 id="revoke-access-title">Revogar acesso?</h2><button type="button" class="icon-button" data-close="revoke-access-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p id="revoke-access-message"></p><p class="dialog-intro">A sessão e o monitoramento desta conta serão encerrados imediatamente. Ela não poderá acessar o Vigia até ser autorizada novamente.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="revoke-access-dialog">Cancelar</button><button type="button" class="button danger" id="confirm-revoke-access">Revogar acesso</button></div></dialog>
+  <dialog id="bt-screenshot-dialog" class="bt-screenshot-dialog" aria-labelledby="bt-screenshot-title"><div class="dialog-header"><h2 id="bt-screenshot-title">Captura de tela do teste</h2><button type="button" class="icon-button" data-close="bt-screenshot-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><img id="bt-screenshot-full" class="bt-screenshot-full" alt="Captura de tela do resultado do teste"></div></dialog>
   <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-header"><div><h2 id="history-title">Histórico de disponibilidade</h2><p id="history-product" class="dialog-intro"></p></div><button class="icon-button" data-close="history-dialog" aria-label="Fechar" data-icon="x"></button></div><div class="dialog-body"><p class="dialog-intro">Ofertas confirmadas dentro dos filtros vigentes na leitura. Horários de Brasília. Alterações atuais não modificam os registros anteriores.</p><div class="history-toolbar"><label>Buscar produto<input id="history-search" type="search" placeholder="Nome, anúncio ou vendedor"></label><label>Plataforma<select id="history-store"><option value="all">Todas</option><option value="amazon">Amazon</option><option value="ml">Mercado Livre</option></select></label><label>Período<select id="history-period"><option value="all">Todo o histórico</option><option value="1">Últimas 24 horas</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></label><label>Ordenar<select id="history-sort"><option value="recent">Mais recentes</option><option value="oldest">Mais antigos</option><option value="price">Menor preço</option></select></label></div><div id="history-stats" class="history-stats"></div><div id="history-content"></div></div></dialog>
   <div id="update-banner" class="update-banner" role="status" aria-live="polite" hidden>
     <span class="update-spinner" id="update-spinner" aria-hidden="true"></span>

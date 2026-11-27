@@ -23,7 +23,6 @@ let vigiaApp = null;
 let localOrigin = null;
 let quitting = false;
 let shutdownCompleted = false;
-let notifiedMinimizeToTray = false;
 
 function getResourcesRoot() {
   return app.isPackaged ? process.resourcesPath : resolve(__dirname, '..');
@@ -190,17 +189,6 @@ function createWindow(url) {
     if (quitting) return;
     event.preventDefault();
     mainWindow.hide();
-    if (!notifiedMinimizeToTray && Notification.isSupported()) {
-      notifiedMinimizeToTray = true;
-      try {
-        new Notification({
-          title: 'Vigia continua em segundo plano',
-          body: 'O monitoramento segue ativo na bandeja do Windows. Clique no ícone para abrir novamente.',
-          silent: true,
-          icon: getIconPath('png'),
-        }).show();
-      } catch {}
-    }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {

@@ -49,7 +49,7 @@ let token=null;
 let busy=false;
 let connected=false;
 let serviceOutdated=false;
-const requiredApiVersion=18;
+const requiredApiVersion=19;
 const displayName=product=>product.name?.trim()||product.title||product.code;
 const outdatedServiceMessage='Reinicie o Vigia para atualizar o serviço local.';
 let toastTimer;
@@ -241,6 +241,7 @@ document.querySelectorAll('dialog').forEach(d=>d.addEventListener('click',e=>{if
 $('nav-products').addEventListener('click',()=>{currentStore='all';$('search').value='';setTabs();render();setView('products');});
 $('brand-home')?.addEventListener('click',e=>{e.preventDefault();setView('products');});
 $('nav-admin')?.addEventListener('click',()=>{setView('admin');});
+$('nav-browser-tests')?.addEventListener('click',()=>{setView('browser-tests');});
 ['add-top','empty-add'].forEach(id=>$(id).addEventListener('click',openProductDialog));
 document.querySelectorAll('.store-tab').forEach(b=>b.addEventListener('click',()=>{currentStore=b.dataset.store;setTabs();render();}));
 document.querySelector('.store-tabs').addEventListener('keydown',e=>{const tabs=[...document.querySelectorAll('.store-tab')],i=tabs.indexOf(document.activeElement);if(i<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();tabs[e.key==='Home'?0:e.key==='End'?tabs.length-1:(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length].click();document.querySelector('.store-tab.active').focus();});
@@ -515,17 +516,27 @@ function syncAdminControls() {
 }
 
 function setView(view) {
-  const next = view === 'admin' && canAccessAdmin(state?.auth) ? 'admin' : 'products';
+  const allowedAdmin = canAccessAdmin(state?.auth);
+  const next = (view === 'admin' || view === 'browser-tests') && allowedAdmin ? view : 'products';
   const changed = activeView !== next;
   activeView = next;
   const productsView = $('products-view');
   const adminView = $('admin-view');
+  const btView = $('browser-tests-view');
   if (productsView) productsView.hidden = next !== 'products';
   if (adminView) adminView.hidden = next !== 'admin';
+  if (btView) btView.hidden = next !== 'browser-tests';
   $('nav-products')?.classList.toggle('active', next === 'products');
   $('nav-admin')?.classList.toggle('active', next === 'admin');
+  $('nav-browser-tests')?.classList.toggle('active', next === 'browser-tests');
   const breadcrumb = $('breadcrumb-current');
-  if (breadcrumb) breadcrumb.textContent = next === 'admin' ? 'Administração' : 'Produtos';
+  if (breadcrumb) {
+    breadcrumb.textContent = next === 'admin'
+      ? 'Administração'
+      : next === 'browser-tests'
+        ? 'Testes do navegador'
+        : 'Produtos';
+  }
   window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   if (next === 'admin') {
     syncAdminControls();
@@ -536,6 +547,11 @@ function setView(view) {
         void loadAdminAllowlist();
       }
     }
+  }
+  if (next === 'browser-tests') {
+    void loadBrowserTests();
+  } else {
+    stopBrowserTestsPolling();
   }
 }
 
@@ -585,11 +601,17 @@ function updateAuth() {
 
   const isAdmin = canAccessAdmin(auth);
   if (navAdmin) navAdmin.hidden = !isAdmin;
+  const navBrowserTests = $('nav-browser-tests');
+  if (navBrowserTests) navBrowserTests.hidden = !isAdmin;
   if (!isAdmin) {
     adminEntries = [];
     pendingRevokeEmail = null;
+    btState = null;
+    btSelectedRunId = null;
+    stopBrowserTestsPolling();
     if ($('revoke-access-dialog')?.open) $('revoke-access-dialog').close();
-    if (activeView === 'admin') setView('products');
+    if ($('bt-screenshot-dialog')?.open) $('bt-screenshot-dialog').close();
+    if (activeView === 'admin' || activeView === 'browser-tests') setView('products');
   }
 
   if (!auth || !auth.enabled) {
@@ -850,5 +872,494 @@ $('confirm-revoke-access')?.addEventListener('click', async () => {
     syncAdminControls();
   }
 });
+
+// ============================================================
+// Testes do navegador headless (somente administradores)
+// ============================================================
+let btState = null;
+let btBusy = false;
+let btCategory = 'all';
+let btSelectedRunId = null;
+let btPollTimer = null;
+let btLastActiveRunId = null;
+let btLastActiveBatch = null;
+
+const btCategoryLabels = {
+  runtime: 'Runtime',
+  detectors: 'Detectores',
+  stability: 'Estabilidade',
+};
+
+const btStatusMeta = {
+  passed: { label: 'Aprovado', cls: 'available' },
+  warning: { label: 'Atenção', cls: 'neutral' },
+  failed: { label: 'Falhou', cls: 'unavailable' },
+  cancelled: { label: 'Cancelado', cls: 'neutral' },
+  running: { label: 'Executando', cls: 'neutral' },
+};
+
+function formatDurationMs(ms) {
+  if (ms == null || !Number.isFinite(ms)) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)} s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.round(totalSec % 60);
+  return `${min}m ${String(sec).padStart(2, '0')}s`;
+}
+
+function stopBrowserTestsPolling() {
+  if (btPollTimer) {
+    clearTimeout(btPollTimer);
+    btPollTimer = null;
+  }
+}
+
+function scheduleBrowserTestsPolling() {
+  stopBrowserTestsPolling();
+  if (activeView !== 'browser-tests' || (!btState?.activeRun && !btState?.activeBatch)) return;
+  btPollTimer = setTimeout(() => {
+    void loadBrowserTests({ silent: true });
+  }, 1500);
+}
+
+async function loadBrowserTests({ silent = false } = {}) {
+  if (!canAccessAdmin(state?.auth)) return;
+  if (!silent) {
+    btBusy = true;
+    renderBrowserTests();
+  }
+  try {
+    const prevActiveId = btLastActiveRunId;
+    const prevBatch = btLastActiveBatch;
+    const next = await api('admin/browser-tests');
+    btState = next;
+    btLastActiveRunId = next.activeRun?.id ?? null;
+    btLastActiveBatch = next.activeBatch ? { ...next.activeBatch } : null;
+    if (prevBatch && !next.activeBatch) {
+      const batchRuns = (next.history ?? []).filter(item => item.batchId === prevBatch.id);
+      if (batchRuns.length) btSelectedRunId = batchRuns[0].id;
+      const passedCount = batchRuns.filter(r => r.status === 'passed').length;
+      toast(`Bateria concluída: ${prevBatch.label} · ${passedCount}/${batchRuns.length || prevBatch.total} aprovados`);
+    } else if (prevActiveId && !next.activeRun && !next.activeBatch) {
+      const finished = (next.history ?? []).find(item => item.id === prevActiveId);
+      if (finished) {
+        btSelectedRunId = finished.id;
+        const meta = btStatusMeta[finished.status] ?? { label: finished.status };
+        toast(`Teste concluído: ${finished.testName} · ${meta.label}`);
+      }
+    } else if (!btSelectedRunId && next.history?.length) {
+      btSelectedRunId = next.history[0].id;
+    }
+    renderBrowserTests();
+    scheduleBrowserTestsPolling();
+  } catch (err) {
+    if (!silent) toast(err.message);
+  } finally {
+    if (!silent) {
+      btBusy = false;
+      renderBrowserTests();
+    }
+  }
+}
+
+function renderSummaryDetails(run) {
+  const s = run.summary;
+  if (!s) return '';
+  if (s.kind === 'pixelscan') {
+    const verdictMap = {
+      human: { label: 'Humano (aprovado)', cls: 'available' },
+      bot: { label: 'Bot detectado', cls: 'unavailable' },
+      inconclusive: { label: 'Inconclusivo', cls: 'neutral' },
+      error: { label: 'Erro na coleta', cls: 'unavailable' },
+    };
+    const vm = verdictMap[s.verdict] ?? { label: String(s.verdict ?? '—'), cls: 'neutral' };
+    const groups = s.groups ? Object.entries(s.groups).map(([k, v]) =>
+      `<div class="bt-kv-item"><dt>${escapeHtml(k)}</dt><dd><span class="badge ${v === 'Clear' ? 'available' : v === 'Detected' ? 'unavailable' : 'neutral'}">${escapeHtml(v)}</span></dd></div>`
+    ).join('') : '';
+    const detected = s.detectedChecks?.length
+      ? `<div class="bt-error-box">Checks marcados como Detected: ${escapeHtml(s.detectedChecks.join(', '))}</div>`
+      : '';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Veredito PixelScan</dt><dd><span class="badge ${vm.cls}">${escapeHtml(vm.label)}</span></dd></div>
+        <div class="bt-kv-item"><dt>Navegador</dt><dd>${escapeHtml(s.browser ?? '—')}</dd></div>
+        ${groups}
+      </dl>
+      ${detected}
+    `;
+  }
+  if (s.kind === 'creepjs') {
+    const ratings = s.ratings && typeof s.ratings === 'object'
+      ? Object.entries(s.ratings).map(([k, v]) =>
+        `<div class="bt-kv-item"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))}</dd></div>`
+      ).join('')
+      : '';
+    const matchText = s.pageWorkerMatch === true
+      ? 'Compatível (Página = Worker)'
+      : s.pageWorkerMatch === false
+        ? 'Divergente (Página ≠ Worker)'
+        : 'Não medido';
+    const matchCls = s.pageWorkerMatch === true ? 'available' : s.pageWorkerMatch === false ? 'unavailable' : 'neutral';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Navegador</dt><dd>${escapeHtml(s.browser ?? '—')}</dd></div>
+        <div class="bt-kv-item"><dt>Identidade Página vs. Worker</dt><dd><span class="badge ${matchCls}">${escapeHtml(matchText)}</span></dd></div>
+        ${ratings}
+      </dl>
+    `;
+  }
+  if (s.kind === 'integration') {
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Ciclos aprovados</dt><dd>${escapeHtml(`${s.passedRounds ?? 0} / ${s.totalRounds ?? 0}`)}</dd></div>
+        <div class="bt-kv-item"><dt>Navegador</dt><dd>${escapeHtml(s.browser ?? '—')}</dd></div>
+      </dl>
+    `;
+  }
+  if (s.kind === 'stability') {
+    const casesHtml = Array.isArray(s.cases) && s.cases.length
+      ? `<div class="bt-cases-list">${s.cases.map(c => `
+          <div class="bt-case-row">
+            <span>${escapeHtml(c.name)}</span>
+            <span>
+              <small>${escapeHtml(formatDurationMs(c.durationMs))}</small>
+              <span class="badge ${c.status === 'passed' ? 'available' : 'unavailable'}">${c.status === 'passed' ? 'OK' : 'Falhou'}</span>
+            </span>
+          </div>
+        `).join('')}</div>`
+      : '';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Casos aprovados</dt><dd>${escapeHtml(`${s.passedCases ?? 0} / ${s.totalCases ?? 0}`)}</dd></div>
+        <div class="bt-kv-item"><dt>Navegador</dt><dd>${escapeHtml(s.browser ?? '—')}</dd></div>
+        ${s.soakSamples ? `<div class="bt-kv-item"><dt>Amostras de soak</dt><dd>${escapeHtml(String(s.soakSamples))}</dd></div>` : ''}
+      </dl>
+      ${casesHtml}
+    `;
+  }
+  if (s.kind === 'workers') {
+    const attHtml = Array.isArray(s.attachments) && s.attachments.length
+      ? `<div class="bt-cases-list">${s.attachments.map(a => `
+          <div class="bt-case-row">
+            <span>${escapeHtml(a.type)}</span>
+            <span class="badge ${a.accepted && a.resumed && !a.error ? 'available' : 'unavailable'}">${a.accepted && a.resumed && !a.error ? 'OK' : escapeHtml(a.error || 'Falhou')}</span>
+          </div>
+        `).join('')}</div>`
+      : '';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Navegador</dt><dd>${escapeHtml(s.browser ?? '—')}</dd></div>
+        ${s.mode ? `<div class="bt-kv-item"><dt>Modo</dt><dd>${escapeHtml(s.mode)}</dd></div>` : ''}
+      </dl>
+      ${attHtml}
+    `;
+  }
+  if (s.kind === 'verify') {
+    const filesHtml = Array.isArray(s.files) && s.files.length
+      ? `<div class="bt-cases-list">${s.files.map(f => `<div class="bt-case-row"><span>${escapeHtml(f)}</span><span class="badge available">OK</span></div>`).join('')}</div>`
+      : '';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Arquivos verificados</dt><dd>${escapeHtml(String(s.verifiedCount ?? 0))}</dd></div>
+      </dl>
+      ${filesHtml}
+    `;
+  }
+  if (s.kind === 'unit') {
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Testes aprovados</dt><dd>${escapeHtml(s.passed != null ? `${s.passed} / ${s.total ?? s.passed}` : '—')}</dd></div>
+        <div class="bt-kv-item"><dt>Falhas</dt><dd>${escapeHtml(String(s.failed ?? 0))}</dd></div>
+      </dl>
+    `;
+  }
+  return '';
+}
+
+function renderBrowserTests() {
+  if (!btState) return;
+  const runtimeEl = $('bt-env-runtime');
+  const chromeEl = $('bt-env-chrome');
+  const statusEl = $('bt-env-status');
+  const countEl = $('bt-env-count');
+  if (runtimeEl) runtimeEl.textContent = btState.runtimeAvailable ? 'Disponível' : 'Ausente';
+  if (chromeEl) chromeEl.textContent = btState.chromeAvailable ? (btState.chromeExecutable || 'Encontrado') : 'Não encontrado';
+  const running = Boolean(btState.activeRun || btState.activeBatch);
+  if (statusEl) {
+    statusEl.textContent = btState.activeBatch
+      ? `Bateria (${btState.activeBatch.currentIndex}/${btState.activeBatch.total})`
+      : btState.activeRun
+        ? 'Executando…'
+        : 'Pronto';
+  }
+  if (countEl) countEl.textContent = String((btState.history ?? []).length).padStart(2, '0');
+
+  const runAllBtn = $('bt-run-all');
+  if (runAllBtn) {
+    runAllBtn.disabled = !connected || btBusy || running || !btState.runtimeAvailable || !btState.chromeAvailable;
+  }
+
+  const activePanel = $('bt-active-panel');
+  if (activePanel) {
+    const active = btState.activeRun;
+    const batch = btState.activeBatch;
+    activePanel.hidden = !active && !batch;
+    if (active || batch) {
+      $('bt-active-name').textContent = active ? active.testName : `Preparando bateria: ${batch.label}`;
+      const startedRef = active?.startedAt || batch?.startedAt;
+      const elapsed = startedRef ? Math.max(0, Date.now() - Date.parse(startedRef)) : 0;
+      $('bt-active-meta').textContent = `Iniciado em ${formatTime(startedRef)} · decorrido ${formatDurationMs(elapsed)}`;
+      const cancelBtn = $('bt-cancel-btn');
+      if (cancelBtn) {
+        cancelBtn.innerHTML = svg('stop') + (batch ? 'Cancelar bateria' : 'Cancelar teste');
+      }
+      const batchBox = $('bt-batch-progress');
+      if (batchBox) {
+        batchBox.hidden = !batch;
+        if (batch) {
+          $('bt-batch-label').textContent = `Bateria: ${batch.label} · ${batch.passed} aprovado(s)${batch.failed ? `, ${batch.failed} falha(s)` : ''}`;
+          $('bt-batch-counter').textContent = `${batch.currentIndex} / ${batch.total}`;
+          const pct = batch.total > 0 ? Math.min(100, Math.round((batch.completed / batch.total) * 100)) : 0;
+          const fill = $('bt-progress-fill');
+          if (fill) fill.style.width = `${pct}%`;
+        }
+      }
+      const logEl = $('bt-active-log');
+      if (logEl) {
+        logEl.textContent = active?.log || 'Aguardando saída do processo…';
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+  }
+
+  const catalog = Array.isArray(btState.catalog) ? btState.catalog : [];
+  const history = Array.isArray(btState.history) ? btState.history : [];
+  const latestByTest = new Map();
+  for (const item of history) {
+    if (!latestByTest.has(item.testId)) latestByTest.set(item.testId, item);
+  }
+  const classActions = $('bt-class-actions');
+  if (classActions) {
+    const categories = ['runtime', 'detectors', 'stability'];
+    classActions.innerHTML = categories.map(cat => {
+      const items = catalog.filter(item => item.category === cat);
+      if (!items.length) return '';
+      const needsChrome = cat !== 'runtime' && !btState.chromeAvailable;
+      const disabled = !connected || btBusy || running || !btState.runtimeAvailable || needsChrome;
+      return `<button type="button" class="button secondary" data-bt-run-category="${cat}" ${disabled ? 'disabled' : ''}>${svg('play')}Rodar ${escapeHtml(btCategoryLabels[cat])} (${items.length})</button>`;
+    }).join('');
+  }
+  const filtered = btCategory === 'all' ? catalog : catalog.filter(item => item.category === btCategory);
+  if ($('bt-catalog-count')) $('bt-catalog-count').textContent = String(filtered.length);
+  const catalogList = $('bt-catalog-list');
+  if (catalogList) {
+    catalogList.innerHTML = filtered.map(item => {
+      const last = latestByTest.get(item.id);
+      const lastMeta = last ? (btStatusMeta[last.status] ?? { label: last.status, cls: 'neutral' }) : null;
+      const isThisRunning = btState.activeRun?.testId === item.id;
+      const needsChromeMissing = item.category !== 'runtime' && !btState.chromeAvailable;
+      const disabled = !connected || btBusy || running || !btState.runtimeAvailable || needsChromeMissing;
+      return `
+        <article class="bt-test-card">
+          <div class="bt-test-meta">
+            <div class="bt-test-head">
+              <strong>${escapeHtml(item.name)}</strong>
+              ${lastMeta ? `<span class="badge ${lastMeta.cls}">${escapeHtml(lastMeta.label)}</span>` : ''}
+            </div>
+            <p class="bt-test-desc">${escapeHtml(item.description)}</p>
+            <div class="bt-test-tags">
+              <span class="bt-tag">${escapeHtml(btCategoryLabels[item.category] ?? item.category)}</span>
+              <span class="bt-tag">${escapeHtml(item.estimatedDuration)}</span>
+              <span class="bt-tag">${item.needsNetwork ? 'Requer internet' : 'Local'}</span>
+              ${item.needsReference ? '<span class="bt-tag">Identidade nativa</span>' : ''}
+            </div>
+          </div>
+          <div class="bt-test-actions">
+            <button type="button" class="button primary" data-bt-run="${escapeHtml(item.id)}" ${disabled ? 'disabled' : ''}>
+              ${svg('play')}${isThisRunning ? 'Executando…' : 'Executar'}
+            </button>
+          </div>
+        </article>
+      `;
+    }).join('');
+  }
+
+  // History list
+  if ($('bt-history-count')) $('bt-history-count').textContent = String(history.length);
+  const clearBtn = $('bt-clear-history');
+  if (clearBtn) clearBtn.disabled = !connected || btBusy || !history.length;
+  const historyList = $('bt-history-list');
+  if (historyList) {
+    if (!history.length) {
+      historyList.innerHTML = '<div class="admin-empty">Nenhum teste executado ainda.</div>';
+    } else {
+      historyList.innerHTML = history.map(item => {
+        const meta = btStatusMeta[item.status] ?? { label: item.status, cls: 'neutral' };
+        const selected = item.id === btSelectedRunId;
+        return `
+          <button type="button" class="bt-history-item ${selected ? 'selected' : ''}" data-bt-select="${escapeHtml(item.id)}">
+            <div>
+              <strong>${escapeHtml(item.testName)}</strong>
+              <small>${escapeHtml(formatTime(item.finishedAt || item.startedAt))} · ${escapeHtml(formatDurationMs(item.durationMs))}</small>
+            </div>
+            <span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>
+          </button>
+        `;
+      }).join('');
+    }
+  }
+
+  // Detail card
+  const selected = history.find(item => item.id === btSelectedRunId) ?? history[0] ?? null;
+  const detailBody = $('bt-detail-body');
+  const detailSubtitle = $('bt-detail-subtitle');
+  if (detailBody) {
+    if (!selected) {
+      if (detailSubtitle) detailSubtitle.textContent = 'Selecione uma execução ou inicie um teste para ver o diagnóstico.';
+      detailBody.innerHTML = '<div class="admin-empty">Nenhuma execução selecionada ainda.</div>';
+    } else {
+      const meta = btStatusMeta[selected.status] ?? { label: selected.status, cls: 'neutral' };
+      if (detailSubtitle) detailSubtitle.textContent = `${formatTime(selected.finishedAt || selected.startedAt)} · Duração: ${formatDurationMs(selected.durationMs)}`;
+      const screenshotUrl = selected.hasScreenshot ? `/api/admin/browser-tests/runs/${encodeURIComponent(selected.id)}/screenshot` : null;
+      detailBody.innerHTML = `
+        <div class="bt-detail-header">
+          <div>
+            <strong>${escapeHtml(selected.testName)}</strong>
+            <small>ID: ${escapeHtml(selected.artifactId || selected.id)}</small>
+          </div>
+          <span class="badge ${meta.cls}">${escapeHtml(meta.label)}</span>
+        </div>
+        ${selected.error ? `<div class="bt-error-box">${escapeHtml(selected.error)}</div>` : ''}
+        ${renderSummaryDetails(selected)}
+        ${screenshotUrl ? `
+          <div class="bt-screenshot-wrap">
+            <img class="bt-screenshot-thumb" src="${escapeHtml(screenshotUrl)}" data-bt-screenshot="${escapeHtml(screenshotUrl)}" data-bt-screenshot-title="${escapeHtml(selected.testName)}" alt="Captura de tela do teste ${escapeHtml(selected.testName)}">
+            <small>Clique na imagem para ampliar a captura completa.</small>
+          </div>
+        ` : ''}
+        <details class="bt-log-details" ${selected.status === 'failed' ? 'open' : ''}>
+          <summary>Saída do terminal (log)</summary>
+          <pre class="bt-log">${escapeHtml(selected.log || '(sem saída)')}</pre>
+        </details>
+      `;
+    }
+  }
+}
+
+$('browser-tests-refresh')?.addEventListener('click', () => {
+  void loadBrowserTests();
+});
+
+$('bt-category-tabs')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-bt-category]');
+  if (!btn) return;
+  btCategory = btn.dataset.btCategory;
+  document.querySelectorAll('#bt-category-tabs [data-bt-category]').forEach(tab => {
+    const active = tab.dataset.btCategory === btCategory;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  renderBrowserTests();
+});
+
+$('bt-catalog-list')?.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-bt-run]');
+  if (!btn || btBusy) return;
+  const testId = btn.dataset.btRun;
+  btBusy = true;
+  renderBrowserTests();
+  try {
+    const result = await api('admin/browser-tests/run', 'POST', { testId });
+    btState = result.state;
+    btLastActiveRunId = result.run?.id ?? null;
+    toast(`Teste iniciado: ${result.run?.testName ?? testId}`);
+    renderBrowserTests();
+    scheduleBrowserTestsPolling();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btBusy = false;
+    renderBrowserTests();
+  }
+});
+
+async function runBrowserTestBatch(category) {
+  if (btBusy) return;
+  btBusy = true;
+  renderBrowserTests();
+  try {
+    const result = await api('admin/browser-tests/run-batch', 'POST', { category });
+    btState = result.state;
+    btLastActiveRunId = result.state?.activeRun?.id ?? null;
+    btLastActiveBatch = result.batch ? { ...result.batch } : null;
+    toast(`Bateria iniciada: ${result.batch?.label ?? category} (${result.batch?.total ?? 0} testes)`);
+    renderBrowserTests();
+    scheduleBrowserTestsPolling();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btBusy = false;
+    renderBrowserTests();
+  }
+}
+
+$('bt-run-all')?.addEventListener('click', () => {
+  void runBrowserTestBatch('all');
+});
+
+$('bt-class-actions')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-bt-run-category]');
+  if (!btn) return;
+  void runBrowserTestBatch(btn.dataset.btRunCategory);
+});
+
+$('bt-cancel-btn')?.addEventListener('click', async () => {
+  if (!btState?.activeRun && !btState?.activeBatch) return;
+  try {
+    const result = await api('admin/browser-tests/cancel', 'POST', {});
+    btState = result.state;
+    toast('Cancelamento solicitado.');
+    renderBrowserTests();
+    scheduleBrowserTestsPolling();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$('bt-history-list')?.addEventListener('click', e => {
+  const btn = e.target.closest('[data-bt-select]');
+  if (!btn) return;
+  btSelectedRunId = btn.dataset.btSelect;
+  renderBrowserTests();
+});
+
+$('bt-clear-history')?.addEventListener('click', async () => {
+  if (btBusy) return;
+  btBusy = true;
+  renderBrowserTests();
+  try {
+    btState = await api('admin/browser-tests/history', 'DELETE', {});
+    btSelectedRunId = null;
+    toast('Histórico de testes limpo.');
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btBusy = false;
+    renderBrowserTests();
+  }
+});
+
+$('bt-detail-body')?.addEventListener('click', e => {
+  const img = e.target.closest('[data-bt-screenshot]');
+  if (!img) return;
+  const dialog = $('bt-screenshot-dialog');
+  const full = $('bt-screenshot-full');
+  const title = $('bt-screenshot-title');
+  if (full) full.src = img.dataset.btScreenshot;
+  if (title) title.textContent = `Captura · ${img.dataset.btScreenshotTitle || 'Teste do navegador'}`;
+  dialog?.showModal();
+});
+
 
 

@@ -12,6 +12,7 @@ import { MonitoringService } from './server/service.mjs';
 import { recoverAbandonedAmazonLock } from './server/amazon-lock.mjs';
 import { AuthClient, loadLocalEnv } from './server/auth-client.mjs';
 import { AutoUpdater } from './server/updater.mjs';
+import { BrowserTestRunner } from './server/browser-tests.mjs';
 import { apiVersion } from './panel-api.mjs';
 
 const directory=dirname(fileURLToPath(import.meta.url));
@@ -94,7 +95,7 @@ export function applyRemoteUserData(service, remoteData) {
   return true;
 }
 
-export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,heartbeatIntervalMs=60_000,updateTargetDirectory=directory,currentVersion,onRestart,tokenCodec=null,onAuthComplete=null,desktopMode=process.env.VIGIA_DESKTOP==='1'}={}) {
+export async function createApplication({dataDirectory=defaultData,adapters,referenceProducts,root=projectRoot,loginOpener,notifier,purchaseRunner,vpsUrl=process.env.VIGIA_VPS_URL??'',authFetch,authNow,offlineGraceMs,heartbeatIntervalMs=60_000,updateTargetDirectory=directory,currentVersion,onRestart,tokenCodec=null,onAuthComplete=null,desktopMode=process.env.VIGIA_DESKTOP==='1',browserTestRunner=null}={}) {
   const unlock=await lockService(dataDirectory);
   let heartbeatTimer=null;
   try {
@@ -128,6 +129,20 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
     };
     const authClient=new AuthClient({dataDirectory,vpsUrl,fetchImpl:authFetch,now:authNow,offlineGraceMs,onSessionRevoked:handleSessionRevoked,tokenCodec});
     await authClient.init();
+    const browserTests=browserTestRunner??new BrowserTestRunner({projectRoot:root,dataDirectory,appVersion});
+    await browserTests.init();
+    const requireAdmin=()=>{
+      if(!authClient.enabled||!authClient.authenticated){
+        const e=new Error('Faça login como administrador para continuar.');
+        e.status=401;
+        throw e;
+      }
+      if(authClient.session?.user?.role!=='admin'){
+        const e=new Error('Acesso restrito a administradores.');
+        e.status=403;
+        throw e;
+      }
+    };
     const isServiceBusy=()=>Boolean(service.state().running||service.purchases.state().busy);
     const updater=new AutoUpdater({authClient,targetDirectory:updateTargetDirectory,currentVersion,onRestart,desktopMode,shouldDeferRestart:isServiceBusy});
     let lastAppliedRemoteUpdatedAt=null;
@@ -297,6 +312,19 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
           if(!authClient.authenticated)return json(401,{error:'Faça login para continuar.'});
           try {return json(200,await authClient.adminListAllowlist());}catch(error){return json(error.status??400,{error:error.message});}
         }
+        if(req.method==='GET'&&url.pathname==='/api/admin/browser-tests'){
+          try {requireAdmin();return json(200,browserTests.state());}catch(error){return json(error.status??400,{error:error.message});}
+        }
+        if(req.method==='GET'&&/^\/api\/admin\/browser-tests\/runs\/[^/]+\/screenshot$/.test(url.pathname)){
+          try {
+            requireAdmin();
+            const runId=safeDecodeParam(url.pathname.split('/')[5]);
+            const png=await browserTests.getScreenshotBuffer(runId);
+            res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store'});
+            res.end(png);
+            return;
+          }catch(error){return json(error.status??400,{error:error.message});}
+        }
         if(req.method==='GET'&&staticFiles.has(url.pathname)){
           const file=staticFiles.get(url.pathname);res.writeHead(200,{'Content-Type':file.endsWith('.js')?'text/javascript; charset=utf-8':file.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8','Cache-Control':'no-store'});res.end(await readFile(join(directory,file)));return;
         }
@@ -323,6 +351,33 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
         if(req.method==='DELETE'&&url.pathname.startsWith('/api/admin/allowlist/')){
           const targetEmail=safeDecodeParam(url.pathname.slice('/api/admin/allowlist/'.length));
           try {return json(200,await authClient.adminRemoveEmail(targetEmail));}catch(error){return json(error.status??400,{error:error.message});}
+        }
+        if(req.method==='POST'&&url.pathname==='/api/admin/browser-tests/run'){
+          try {
+            requireAdmin();
+            const run=await browserTests.start(String(input.testId??'').trim());
+            return json(202,{run,state:browserTests.state()});
+          }catch(error){return json(error.status??400,{error:error.message});}
+        }
+        if(req.method==='POST'&&url.pathname==='/api/admin/browser-tests/run-batch'){
+          try {
+            requireAdmin();
+            const batch=await browserTests.startBatch({category:String(input.category??'all').trim()});
+            return json(202,{batch,state:browserTests.state()});
+          }catch(error){return json(error.status??400,{error:error.message});}
+        }
+        if(req.method==='POST'&&url.pathname==='/api/admin/browser-tests/cancel'){
+          try {
+            requireAdmin();
+            const result=await browserTests.cancel();
+            return json(200,{...result,state:browserTests.state()});
+          }catch(error){return json(error.status??400,{error:error.message});}
+        }
+        if(req.method==='DELETE'&&url.pathname==='/api/admin/browser-tests/history'){
+          try {
+            requireAdmin();
+            return json(200,await browserTests.clearHistory());
+          }catch(error){return json(error.status??400,{error:error.message});}
         }
         if(req.method==='POST'&&url.pathname==='/api/updates/apply'){
           await updater.applyReadyUpdate();
@@ -369,7 +424,7 @@ export async function createApplication({dataDirectory=defaultData,adapters,refe
       } catch(error) {if(!res.headersSent)json(error.status??500,{error:error.status?error.message:'Não foi possível concluir a solicitação: '+error.message});else res.end();}
     });
     server.requestTimeout=30000;
-    return {server,service,authClient,updater,async close(){if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}await service.close();await mutationQueue;server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve));await unlock();}};
+    return {server,service,authClient,updater,browserTests,async close(){if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}await browserTests.close();await service.close();await mutationQueue;server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve));await unlock();}};
   } catch(error){if(heartbeatTimer){clearInterval(heartbeatTimer);heartbeatTimer=null;}await unlock();throw error;}
 }
 

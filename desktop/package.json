@@ -1,6 +1,6 @@
 {
   "name": "vigia-desktop",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "description": "Vigia — Monitor de preços e disponibilidade para Amazon e Mercado Livre",
@@ -58,6 +58,7 @@
           "puppeteer-headless-runtime/package.json",
           "puppeteer-headless-runtime/src/**/*",
           "puppeteer-headless-runtime/scripts/**/*",
+          "puppeteer-headless-runtime/patches/**/*",
           "puppeteer-headless-runtime/node_modules/**/*"
         ]
       }
