@@ -16,6 +16,7 @@ export const BROWSER_TEST_CATEGORIES = {
   runtime: 'Runtime',
   detectors: 'Detectores',
   stability: 'Estabilidade',
+  purchase: 'Compras',
 };
 
 export const BROWSER_TEST_CATALOG = [
@@ -88,6 +89,50 @@ export const BROWSER_TEST_CATALOG = [
     needsNetwork: false,
     needsReference: true,
     args: ['scripts/test-native-stability.js', 'soak'],
+  },
+  {
+    id: 'purchase-amazon-pix',
+    name: 'Simulação de compra · Amazon (Pix)',
+    category: 'purchase',
+    description: 'Simula toda a compra Amazon por Pix em Chrome headless real (100% local), sorteando aleatoriamente entre Fluxo A e Fluxo B.',
+    estimatedDuration: '~10–20 s',
+    needsNetwork: false,
+    needsReference: false,
+    cwd: 'projectRoot',
+    args: ['interface/server/run-purchase-simulation.mjs', 'purchase-amazon-pix', 'random'],
+  },
+  {
+    id: 'purchase-amazon-card',
+    name: 'Simulação de compra · Amazon (Cartão)',
+    category: 'purchase',
+    description: 'Simula toda a compra Amazon por cartão à vista em Chrome headless real (100% local), sorteando aleatoriamente entre Fluxo A e Fluxo B.',
+    estimatedDuration: '~10–20 s',
+    needsNetwork: false,
+    needsReference: false,
+    cwd: 'projectRoot',
+    args: ['interface/server/run-purchase-simulation.mjs', 'purchase-amazon-card', 'random'],
+  },
+  {
+    id: 'purchase-ml-pix',
+    name: 'Simulação de compra · Mercado Livre (Pix)',
+    category: 'purchase',
+    description: 'Simula todo o fluxo de compra do Mercado Livre por Pix em Chrome headless real (100% local), validando carrinho, frete e código Pix.',
+    estimatedDuration: '~10–20 s',
+    needsNetwork: false,
+    needsReference: false,
+    cwd: 'projectRoot',
+    args: ['interface/server/run-purchase-simulation.mjs', 'purchase-ml-pix'],
+  },
+  {
+    id: 'purchase-ml-card',
+    name: 'Simulação de compra · Mercado Livre (Cartão)',
+    category: 'purchase',
+    description: 'Simula todo o fluxo de compra do Mercado Livre por cartão à vista em Chrome headless real (100% local), validando seleção do cartão e confirmação.',
+    estimatedDuration: '~10–20 s',
+    needsNetwork: false,
+    needsReference: false,
+    cwd: 'projectRoot',
+    args: ['interface/server/run-purchase-simulation.mjs', 'purchase-ml-card'],
   },
 ];
 
@@ -163,6 +208,24 @@ function parseTestOutputSummary(testId, report, stdout, stderr, exitCode) {
         passedCases: cases.filter(c => c.status === 'passed').length,
         totalCases: cases.length,
         soakSamples: samples,
+        error: report.error ?? null,
+      };
+    }
+    if (testId.startsWith('purchase-')) {
+      return {
+        kind: 'purchase',
+        status: report.status ?? (exitCode === 0 ? 'passed' : 'failed'),
+        storeLabel: report.storeLabel ?? null,
+        paymentLabel: report.paymentLabel ?? null,
+        flow: report.flow ?? null,
+        flowLabel: report.flowLabel ?? null,
+        totalCents: report.totalCents ?? null,
+        finalClicks: report.finalClicks ?? null,
+        trustedClicks: report.trustedClicks ?? null,
+        stagesCount: report.stagesCount ?? null,
+        recoveredFaults: Array.isArray(report.recoveredFaults) ? report.recoveredFaults : [],
+        pixVerified: Boolean(report.pixVerified),
+        orderReferences: Array.isArray(report.orderReferences) ? report.orderReferences : [],
         error: report.error ?? null,
       };
     }
@@ -530,9 +593,10 @@ export class BrowserTestRunner {
       } else {
         const env = {
           ...process.env,
+          MONITOR_PROJECT_ROOT: this.projectRoot,
           RESEARCH_OUTPUT_ROOT: this.outputRoot,
           RESEARCH_APP_VERSION: this.appVersion,
-          ...(chromePath ? { RESEARCH_CHROME_EXECUTABLE: chromePath } : {}),
+          ...(chromePath ? { RESEARCH_CHROME_EXECUTABLE: chromePath, ML_CHROME_EXECUTABLE: chromePath } : {}),
           ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
         };
         delete env.NODE_TEST_CONTEXT;
@@ -545,7 +609,7 @@ export class BrowserTestRunner {
         onLog(`[Vigia] Iniciando: ${spec.name}\n`);
         exitCode = await new Promise((resolveExit, rejectExit) => {
           const child = spawn(process.execPath, spec.args, {
-            cwd: this.runtimeRoot,
+            cwd: spec.cwd === 'projectRoot' ? this.projectRoot : this.runtimeRoot,
             env,
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,

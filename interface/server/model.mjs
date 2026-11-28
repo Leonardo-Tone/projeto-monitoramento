@@ -12,7 +12,7 @@ export function productIdentity(value, store) {
     return { code:asin, type:'amazon', url:`https://www.amazon.com.br/dp/${asin}` };
   }
   if (store !== 'ml' || !['produto.mercadolivre.com.br','www.mercadolivre.com.br','mercadolivre.com.br'].includes(u.hostname)) throw new Error('Use um link completo do Mercado Livre Brasil.');
-  const catalog = u.pathname.match(/\/p\/(MLB\d+)(?:\/|$)/i)?.[1]?.toUpperCase();
+  const catalog = u.pathname.match(/\/(?:p\/(MLB\d+)|up\/(MLBU\d+))(?:\/|$)/i)?.slice(1).find(Boolean)?.toUpperCase();
   const item = catalog ? u.searchParams.get('pdp_filters')?.match(/(?:^|\|)item_id:(MLB\d+)(?:\||$)/i)?.[1]?.toUpperCase() : u.pathname.match(/(MLB)-?(\d+)/i)?.slice(1).join('').toUpperCase();
   if (!item) throw new Error(catalog ? 'No catálogo, use o link da oferta com pdp_filters=item_id:MLB… para identificar o anúncio exato.' : 'Não foi possível identificar o código MLB do anúncio.');
   if (!catalog && u.hostname !== 'produto.mercadolivre.com.br') throw new Error('Use o link do anúncio em produto.mercadolivre.com.br ou um catálogo com a oferta selecionada.');

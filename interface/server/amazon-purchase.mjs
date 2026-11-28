@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { launchProfile } from './profiles.mjs';
+import { isTransientBrowserSessionError, launchProfile } from './profiles.mjs';
 import { readAcrossNavigation } from './purchase-navigation.mjs';
 import { readPurchaseHtml } from './purchase-dom.mjs';
 import { amazonOrigin, cartLine, copyPix, createAmazonCheckoutParser, placeOrder, validateAmazonReview } from './amazon-checkout.mjs';
@@ -173,7 +173,7 @@ export function validateAmazonCart(cart, item, oid, quantity) {
 
 export async function runAmazonPurchase({
   order, settings, projectRoot, dataDirectory, signal, stage, launcher = launchProfile, reviewOnly = false,
-  headlessMode = process.env.VIGIA_AMAZON_TESTE_HEADLESS,
+  headlessMode = process.env.VIGIA_AMAZON_TESTE_HEADLESS, openAttempts = 4, openRetryDelayMs = 800,
 }) {
   const headless = headlessMode !== '0';
   const stopAtReview = headlessMode === '1';
@@ -187,8 +187,28 @@ export async function runAmazonPurchase({
       !Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 100 || !validPayment) {
     throw new Error('Tentativa de compra Amazon inválida.');
   }
-  const { browser } = await launcher({ projectRoot, dataDirectory, store: 'amazon', purpose: 'purchase', headless });
   let checkpoint = 'Abrindo perfil Compra da Amazon.';
+  let browser = null;
+  let productPage, page;
+  const maxOpenAttempts = Math.max(1, Number(openAttempts) || 1);
+  for (let attempt = 1; attempt <= maxOpenAttempts; attempt++) {
+    signal?.throwIfAborted();
+    let candidate = null;
+    try {
+      ({ browser: candidate } = await launcher({ projectRoot, dataDirectory, store: 'amazon', purpose: 'purchase', headless }));
+      productPage = await candidate.newPage();
+      page = await candidate.newPage();
+      browser = candidate;
+      break;
+    } catch (error) {
+      if (candidate) await candidate.close().catch(() => {});
+      if (attempt >= maxOpenAttempts || !isTransientBrowserSessionError(error) || signal?.aborted) {
+        error.purchaseStep = checkpoint;
+        throw error;
+      }
+      if (openRetryDelayMs > 0) await delay(openRetryDelayMs, undefined, { signal });
+    }
+  }
   let result, failure, diagnosticPage, popup, paymentState;
   const snapshots = new Map();
   const paymentTrace = { inputs: [], requests: [] };
@@ -288,8 +308,6 @@ export async function runAmazonPurchase({
   const checkoutPath = /^\/checkout(?:\/|$)/;
 
   try {
-    const productPage = await browser.newPage();
-    const page = await browser.newPage();
     page.on?.('popup', tab => { popup = tab; });
     page.on?.('request', request => {
       if (request.method() !== 'POST' || paymentTrace.requests.length >= 12) return;
@@ -651,7 +669,7 @@ export async function runAmazonPurchase({
     } catch { error.diagnosticWarning = 'Não foi possível salvar a captura HTML da Amazon.'; }
     throw error;
   } finally {
-    await browser.close().catch(error => {
+    if (browser) await browser.close().catch(error => {
       if (result) result.cleanupWarning = String(error.message);
       else if (failure) failure.cleanupWarning = String(error.message);
     });

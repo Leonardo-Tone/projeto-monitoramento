@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { consultarCatalogo, consultarProduto } from '../server/ml-v3-core.mjs';
-import { waitForMlBrowserWall } from '../server/ml-verification.mjs';
+import { waitForMlBrowserWall, sameMlDestination } from '../server/ml-verification.mjs';
+import { productIdentity } from '../server/model.mjs';
 
 const product={url:'https://produto.mercadolivre.com.br/MLB-123-_JM'};
 const wall='https://www.mercadolivre.com.br/captcha/wall/logged';
@@ -62,4 +63,15 @@ test('monitor reports a visible CAPTCHA without waiting for the wall timeout',as
 
 test('wall timeout also bounds an inspection that does not respond',async()=>{
   assert.deepEqual(await waitForMlBrowserWall(()=>new Promise(()=>{}),{timeoutMs:10}),{kind:'WALL_TIMEOUT'});
+});
+
+test('Mercado Livre /up/MLBU user-product URLs with pdp_filters=item_id are accepted and matched',()=>{
+  const raw='https://www.mercadolivre.com.br/colecao-premium-ditto-pokemon-30-anos-copag/up/MLBU4784057981?pdp_filters=item_id%3AMLB7447549256&matt_event_ts=1795489829693#polycard_client=recommendations';
+  const id=productIdentity(raw,'ml');
+  assert.equal(id.code,'MLB7447549256');
+  assert.equal(id.catalog,'MLBU4784057981');
+  assert.equal(id.type,'catalogo');
+  assert.equal(id.url.includes('#'),false);
+  assert.equal(sameMlDestination('https://www.mercadolivre.com.br/outro-slug/up/MLBU4784057981',id.url),true);
+  assert.throws(()=>productIdentity('https://www.mercadolivre.com.br/produto/up/MLBU4784057981','ml'),/pdp_filters=item_id:MLB/);
 });

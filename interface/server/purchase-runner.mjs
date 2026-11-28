@@ -78,7 +78,7 @@ export async function runPurchase({order,settings,projectRoot,dataDirectory,sign
   try {
     await stage('REVALIDATING','Conferindo os anúncios no perfil de compra.');
     // The conditional mode may need the visible card security prompt.
-    await session.start(method==='pix');syncPages();
+    await session.start(method==='pix',{signal});syncPages();
     for(;;){
       try {
         verified.clear();

@@ -16,7 +16,7 @@ export const sameMlDestination=(actual,expected)=>{
     const path=u=>u.pathname.replace(/\/$/,'');
     if(path(a)===path(b))return true;
     const item=u=>/^\/(MLB-?\d+)(?:-|\/|$)/i.exec(u.pathname)?.[1].replace('-','').toUpperCase();
-    const catalog=u=>/\/p\/(MLB\d+)(?:\/|$)/i.exec(u.pathname)?.[1].toUpperCase();
+    const catalog=u=>/\/(?:p\/(MLB\d+)|up\/(MLBU\d+))(?:\/|$)/i.exec(u.pathname)?.slice(1).find(Boolean)?.toUpperCase();
     return Boolean(item(b)&&item(a)===item(b)||catalog(b)&&catalog(a)===catalog(b));
   }catch{return false;}
 };

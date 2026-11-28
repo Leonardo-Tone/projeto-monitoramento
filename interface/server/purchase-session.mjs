@@ -1,13 +1,26 @@
-import { launchProfile } from './profiles.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { isTransientBrowserSessionError, launchProfile } from './profiles.mjs';
 import { purchasePageKind } from './purchase-human.mjs';
 
 export class PurchaseSession {
-  constructor({projectRoot,dataDirectory,launcher=launchProfile}){Object.assign(this,{projectRoot,dataDirectory,launcher});this.headless=true;this.browser=null;}
-  async start(headless=true){
-    const lease=await this.launcher({projectRoot:this.projectRoot,dataDirectory:this.dataDirectory,store:'ml',purpose:'purchase',headless});
-    this.browser=lease.browser;this.headless=headless;
-    try{this.cartPage=await this.browser.newPage();this.productPage=await this.browser.newPage();}
-    catch(error){await this.close();throw error;}
+  constructor({projectRoot,dataDirectory,launcher=launchProfile,openAttempts=4,retryDelayMs=800}){Object.assign(this,{projectRoot,dataDirectory,launcher,openAttempts,retryDelayMs});this.headless=true;this.browser=null;}
+  async start(headless=true,{signal=null}={}){
+    const maxAttempts=Math.max(1,Number(this.openAttempts)||1);
+    for(let attempt=1;attempt<=maxAttempts;attempt++){
+      signal?.throwIfAborted();
+      let lease;
+      try{
+        lease=await this.launcher({projectRoot:this.projectRoot,dataDirectory:this.dataDirectory,store:'ml',purpose:'purchase',headless});
+        this.browser=lease.browser;this.headless=headless;
+        this.cartPage=await this.browser.newPage();
+        this.productPage=await this.browser.newPage();
+        return;
+      }catch(error){
+        await this.close().catch(()=>{});
+        if(attempt>=maxAttempts||!isTransientBrowserSessionError(error)||signal?.aborted)throw error;
+        if(this.retryDelayMs>0)await delay(this.retryDelayMs,undefined,{signal:signal??undefined});
+      }
+    }
   }
   async showHuman(page){
     if(!this.headless)return page;

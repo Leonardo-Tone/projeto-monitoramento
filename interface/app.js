@@ -888,6 +888,7 @@ const btCategoryLabels = {
   runtime: 'Runtime',
   detectors: 'Detectores',
   stability: 'Estabilidade',
+  purchase: 'Compras',
 };
 
 const btStatusMeta = {
@@ -1066,6 +1067,23 @@ function renderSummaryDetails(run) {
       ${filesHtml}
     `;
   }
+  if (s.kind === 'purchase') {
+    const totalFmt = Number.isInteger(s.totalCents) ? formatPrice(s.totalCents / 100) : '—';
+    const faultsHtml = Array.isArray(s.recoveredFaults) && s.recoveredFaults.length
+      ? `<div class="bt-cases-list">${s.recoveredFaults.map(f => `<div class="bt-case-row"><span>Falha injetada: ${escapeHtml(f)}</span><span class="badge available">Recuperada</span></div>`).join('')}</div>`
+      : '';
+    return `
+      <dl class="bt-kv-grid">
+        <div class="bt-kv-item"><dt>Loja</dt><dd>${escapeHtml(s.storeLabel ?? '—')}</dd></div>
+        <div class="bt-kv-item"><dt>Pagamento</dt><dd>${escapeHtml(s.paymentLabel ?? '—')}</dd></div>
+        ${s.flowLabel ? `<div class="bt-kv-item"><dt>Caminho simulado</dt><dd>${escapeHtml(s.flowLabel)}</dd></div>` : ''}
+        <div class="bt-kv-item"><dt>Total validado</dt><dd>${escapeHtml(totalFmt)}</dd></div>
+        <div class="bt-kv-item"><dt>Cliques confiáveis</dt><dd>${escapeHtml(String(s.trustedClicks ?? '—'))}</dd></div>
+        <div class="bt-kv-item"><dt>Finalizações</dt><dd>${escapeHtml(String(s.finalClicks ?? '—'))}</dd></div>
+      </dl>
+      ${faultsHtml}
+    `;
+  }
   if (s.kind === 'unit') {
     return `
       <dl class="bt-kv-grid">
@@ -1141,7 +1159,7 @@ function renderBrowserTests() {
   }
   const classActions = $('bt-class-actions');
   if (classActions) {
-    const categories = ['runtime', 'detectors', 'stability'];
+    const categories = ['runtime', 'detectors', 'stability', 'purchase'];
     classActions.innerHTML = categories.map(cat => {
       const items = catalog.filter(item => item.category === cat);
       if (!items.length) return '';

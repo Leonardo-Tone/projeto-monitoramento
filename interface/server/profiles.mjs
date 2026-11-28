@@ -6,6 +6,10 @@ import { closeOwnedBrowser } from './browser-cleanup.mjs';
 import { gotoAmazonPage, isAmazonShoppingWall } from './amazon-navigation.mjs';
 
 export const accountKeys=['amazon/monitor','amazon/purchase','ml/monitor','ml/purchase'];
+const TRANSIENT_SESSION_RE=/target closed|session closed|connection closed|browser disconnected|session with given id not found|target with given id not found|a sessão do chrome foi encerrada/i;
+export function isTransientBrowserSessionError(error) {
+  return error?.code==='BROWSER_DISCONNECTED'||TRANSIENT_SESSION_RE.test(String(error?.message??error??''));
+}
 export function chromeProfile(projectRoot,dataDirectory,store,purpose) {
   const key=`${store}/${purpose}`;
   if(!accountKeys.includes(key))throw new Error('Conta ou finalidade inválida.');
@@ -75,11 +79,13 @@ export function createProfilePool(launcher=launchDedicatedProfile) {
     native.once('disconnected',disconnected);
     lease.pages=async()=>{
       if(!isCurrent())throw Object.assign(new Error('A sessão do Chrome foi encerrada.'),{code:'BROWSER_DISCONNECTED'});
-      return typeof native.pages==='function'?await native.pages():[...pages];
+      try{return typeof native.pages==='function'?await native.pages():[...pages];}
+      catch(error){if(isTransientBrowserSessionError(error))entry.disconnected=true;throw error;}
     };
     lease.newPage=async()=>{
       if(!isCurrent())throw Object.assign(new Error('A sessão do Chrome foi encerrada.'),{code:'BROWSER_DISCONNECTED'});
-      const page=await native.newPage();pages.add(page);page.once('close',()=>pages.delete(page));return page;
+      try{const page=await native.newPage();pages.add(page);page.once('close',()=>pages.delete(page));return page;}
+      catch(error){if(isTransientBrowserSessionError(error))entry.disconnected=true;throw error;}
     };
     if(options.purpose==='monitor'&&options.headless){
       lease.isCurrent=isCurrent;
