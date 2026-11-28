@@ -15,6 +15,16 @@
      - Se também não houver backup válido, iniciar com `{ schemaVersion: 1, products: [] }` para o app abrir normalmente e ressincronizar os dados a partir da VPS.
   4. Adicionar testes unitários cobrindo `registry.json` zerado/truncado, recuperação via `registry.bak.json` e fallback limpo.
 
+## P1 · Ignorar itens de "Salvos para mais tarde" (`#sc-saved-cart`) ao ler o carrinho da Amazon
+
+- **Registrado em:** 2026-11-28
+- **Arquivos afetados:** `interface/server/amazon-checkout.mjs` (`cartLine`, `parser.cart`), `interface/server/amazon-purchase.mjs`, `interface/server/purchase-simulation.mjs`
+- **Problema observado:**
+  Na tentativa de compra `c393f90b` (28/11/2026 às 14:05), o carrinho ativo (`#sc-active-cart`) estava vazio, mas a conta possuía 1 item em "Salvos para mais tarde" (`#sc-saved-cart`). Como `cartLine = '.sc-list-item[data-asin][data-itemid]'` captura itens de toda a página e itens salvos para mais tarde não possuem `data-isselected="0"|"1"`, a leitura inicial falhou com `"Seleção do carrinho inicial da Amazon não verificável."`.
+- **Correção planejada:**
+  1. Restringir a leitura de itens do carrinho da Amazon em `parser.cart` (e seletores de desmarcar/incrementar em `amazon-purchase.mjs`) apenas ao carrinho ativo (`#sc-active-cart` / excluindo `#sc-saved-cart` e `#sc-secondary-list`).
+  2. Incluir um item simulado em `#sc-saved-cart` (sem `data-isselected`) nas simulações de compra da Amazon (`purchase-simulation.mjs`) e em `amazon-purchase.test.mjs` para evitar regressão.
+
 ## P2 · Detectar automaticamente a plataforma (Amazon / Mercado Livre) pelo link ao adicionar produto
 
 - **Registrado em:** 2026-11-28
